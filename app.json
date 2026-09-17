@@ -13,6 +13,12 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e8f4f83b-ccec-4c44-8e33-f469809cbcd5"
+      }
+    },
+    "owner": "dr.bahadiryildiz"
   }
 }
