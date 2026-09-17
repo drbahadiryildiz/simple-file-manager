@@ -1,13 +1,36 @@
 {
   "expo": {
-    "name": "Dosya Yöneticisi",
+    "name": "Simple File Manager",
     "slug": "simple-file-manager",
-    "version": "1.0.0",
+    "owner": "dr.bahadiryildiz",
+    "version": "1.3.1",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0F172A",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 280,
+          "resizeMode": "contain",
+          "dark": {
+            "backgroundColor": "#090F1C",
+            "image": "./assets/splash-icon.png"
+          }
+        }
+      ]
+    ],
     "android": {
       "package": "com.local.simplefilemanager",
-      "versionCode": 1,
+      "versionCode": 6,
+      "icon": "./assets/icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "monochromeImage": "./assets/monochrome-icon.png",
+        "backgroundColor": "#0F172A"
+      },
       "permissions": [
         "android.permission.MANAGE_EXTERNAL_STORAGE",
         "android.permission.READ_EXTERNAL_STORAGE",
@@ -18,7 +41,6 @@
       "eas": {
         "projectId": "e8f4f83b-ccec-4c44-8e33-f469809cbcd5"
       }
-    },
-    "owner": "dr.bahadiryildiz"
+    }
   }
 }

@@ -1,0 +1,32 @@
+import { requireNativeModule } from 'expo';
+
+export type NativeFileEntry = {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size: number;
+  lastModified: number;
+};
+
+type NativeSettings = {
+  theme?: string | null;
+  scale?: number | null;
+};
+
+type SimpleFileManagerNativeModule = {
+  getRootPath(): string;
+  hasAllFilesAccess(): boolean;
+  openAllFilesAccessSettings(): boolean;
+  list(path: string): Promise<NativeFileEntry[]>;
+  exists(path: string): Promise<boolean>;
+  mkdir(path: string): Promise<boolean>;
+  createFile(path: string): Promise<boolean>;
+  delete(path: string): Promise<boolean>;
+  copy(source: string, destination: string): Promise<boolean>;
+  move(source: string, destination: string): Promise<boolean>;
+  openFile(path: string, mime: string): Promise<boolean>;
+  getSettings(): Promise<NativeSettings>;
+  saveSettings(theme: string, scale: number): Promise<boolean>;
+};
+
+export default requireNativeModule<SimpleFileManagerNativeModule>('SimpleFileManagerNative');

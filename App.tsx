@@ -1,43 +1,111 @@
 import { StatusBar } from 'expo-status-bar';
-import { Directory, File } from 'expo-file-system';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import NativeStorage from './modules/simple-file-manager-native';
 import {
   ActivityIndicator,
   Alert,
   AppState,
   BackHandler,
   FlatList,
+  Image,
   Linking,
   Modal,
   PermissionsAndroid,
   Platform,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
+  useColorScheme,
   View,
 } from 'react-native';
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+  initialWindowMetrics,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 
-type FsItem = File | Directory;
+type ThemeMode = 'light' | 'dark';
 type ClipboardMode = 'copy' | 'move';
+type AccessIssueKind = 'permission' | 'protected' | 'folder' | null;
+
+type FileEntry = {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size: number;
+};
 
 type ClipboardState = {
   mode: ClipboardMode;
-  item: FsItem;
-  isDirectory: boolean;
+  item: FileEntry;
 } | null;
 
-const ROOT_URI = 'file:///storage/emulated/0/';
-const ROOT = new Directory(ROOT_URI);
+type AppSettings = {
+  theme: ThemeMode;
+  scale: number;
+};
 
-function isDirectory(item: FsItem): item is Directory {
-  return item instanceof Directory;
-}
+type Palette = {
+  background: string;
+  surface: string;
+  surfaceAlt: string;
+  text: string;
+  textMuted: string;
+  border: string;
+  pressed: string;
+  primary: string;
+  primarySoft: string;
+  primaryText: string;
+  danger: string;
+  overlay: string;
+  input: string;
+  success: string;
+};
 
-function normalizeUri(uri: string) {
-  return uri.endsWith('/') ? uri : `${uri}/`;
-}
+const PACKAGE_NAME = 'com.local.simplefilemanager';
+const APP_NAME = 'Simple File Manager';
+const APP_VERSION = '1.3.1';
+const CONTACT_EMAIL = 'bahadir@bahadiryildiz.net';
+const ROOT_PATH = Platform.OS === 'android' ? NativeStorage.getRootPath() : '';
+const MIN_SCALE = 0.8;
+const MAX_SCALE = 1.4;
+const SCALE_STEP = 0.1;
+
+const LIGHT: Palette = {
+  background: '#f4f5f7',
+  surface: '#ffffff',
+  surfaceAlt: '#f0f2f5',
+  text: '#16171a',
+  textMuted: '#6d7078',
+  border: '#d9dce2',
+  pressed: '#eceef2',
+  primary: '#2563eb',
+  primarySoft: '#eaf0ff',
+  primaryText: '#ffffff',
+  danger: '#c62828',
+  overlay: 'rgba(0,0,0,0.48)',
+  input: '#ffffff',
+  success: '#16803a',
+};
+
+const DARK: Palette = {
+  background: '#111318',
+  surface: '#1a1d24',
+  surfaceAlt: '#242832',
+  text: '#f4f5f7',
+  textMuted: '#a8adb8',
+  border: '#353a46',
+  pressed: '#292e38',
+  primary: '#6d91ff',
+  primarySoft: '#202d53',
+  primaryText: '#0d1220',
+  danger: '#ff7676',
+  overlay: 'rgba(0,0,0,0.70)',
+  input: '#22262f',
+  success: '#58d47c',
+};
 
 function cleanName(name: string) {
   return name.trim();
@@ -45,7 +113,24 @@ function cleanName(name: string) {
 
 function isValidName(name: string) {
   const value = cleanName(name);
-  return value.length > 0 && value !== '.' && value !== '..' && !value.includes('/') && !value.includes('\0');
+  return value.length > 0 && value !== '.' && value !== '..' && !value.includes('/') && !value.includes('\\') && !value.includes('\0');
+}
+
+function clampScale(value: number) {
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.round(value * 10) / 10));
+}
+
+function joinPath(parent: string, name: string) {
+  return `${parent.replace(/\/+$/, '')}/${name.replace(/^\/+/, '')}`;
+}
+
+function normalizePath(path: string) {
+  return path.replace(/\/+$/, '');
+}
+
+function baseName(path: string) {
+  const clean = normalizePath(path);
+  return clean.split('/').pop() || 'Dahili Depolama';
 }
 
 function formatSize(bytes?: number | null) {
@@ -56,65 +141,263 @@ function formatSize(bytes?: number | null) {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
-function getPathLabel(stack: Directory[]) {
-  if (stack.length === 1) return 'Dahili Depolama';
-  return stack[stack.length - 1].name || 'Klasör';
+function mimeTypeForName(name: string) {
+  const ext = name.split('.').pop()?.toLowerCase();
+  const types: Record<string, string> = {
+    txt: 'text/plain', md: 'text/markdown', json: 'application/json', csv: 'text/csv',
+    pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+    gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', mp3: 'audio/mpeg',
+    wav: 'audio/wav', m4a: 'audio/mp4', mp4: 'video/mp4', mkv: 'video/x-matroska',
+    avi: 'video/x-msvideo', zip: 'application/zip', rar: 'application/vnd.rar',
+    '7z': 'application/x-7z-compressed', doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    apk: 'application/vnd.android.package-archive',
+  };
+  return ext ? types[ext] ?? '*/*' : '*/*';
 }
 
-function cloneDestination(item: FsItem, destinationDir: Directory) {
-  return isDirectory(item)
-    ? new Directory(destinationDir, item.name)
-    : new File(destinationDir, item.name);
+function isProtectedAndroidPath(path: string) {
+  const value = normalizePath(path).toLowerCase();
+  const root = normalizePath(ROOT_PATH).toLowerCase();
+  return value === `${root}/android/data` || value.startsWith(`${root}/android/data/`) ||
+    value === `${root}/android/obb` || value.startsWith(`${root}/android/obb/`);
 }
 
-export default function App() {
-  const [stack, setStack] = useState<Directory[]>([ROOT]);
-  const currentDir = stack[stack.length - 1];
-  const [items, setItems] = useState<FsItem[]>([]);
+function looksLikePermissionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /permission|denied|eacces|eperm|not permitted|read permission|write permission/i.test(message);
+}
+
+async function loadSettings(fallbackTheme: ThemeMode): Promise<AppSettings> {
+  try {
+    const parsed = await NativeStorage.getSettings();
+    return {
+      theme: parsed.theme === 'dark' || parsed.theme === 'light' ? parsed.theme : fallbackTheme,
+      scale: typeof parsed.scale === 'number' ? clampScale(parsed.scale) : 1,
+    };
+  } catch {
+    return { theme: fallbackTheme, scale: 1 };
+  }
+}
+
+async function saveSettings(settings: AppSettings) {
+  try {
+    await NativeStorage.saveSettings(settings.theme, settings.scale);
+  } catch {
+    // Görünüm ayarları dosya işlemlerini engellememeli.
+  }
+}
+
+async function verifyStorageAccess() {
+  if (Platform.OS !== 'android') return true;
+  try {
+    return NativeStorage.hasAllFilesAccess();
+  } catch {
+    return false;
+  }
+}
+
+async function readDirectory(path: string): Promise<FileEntry[]> {
+  const result = await NativeStorage.list(path);
+  return result
+    .map(item => ({
+      name: item.name,
+      path: item.path,
+      isDirectory: item.isDirectory,
+      size: Number(item.size || 0),
+    }))
+    .sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      return a.name.localeCompare(b.name, 'tr', { sensitivity: 'base' });
+    });
+}
+
+function AppContent() {
+  const systemScheme = useColorScheme();
+  const insets = useSafeAreaInsets();
+  const initialTheme: ThemeMode = systemScheme === 'dark' ? 'dark' : 'light';
+
+  const [theme, setTheme] = useState<ThemeMode>(initialTheme);
+  const [uiScale, setUiScale] = useState(1);
+  const [booting, setBooting] = useState(true);
+  const [storageReady, setStorageReady] = useState(false);
+  const [stack, setStack] = useState<string[]>([ROOT_PATH]);
+  const [items, setItems] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [accessError, setAccessError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<FsItem | null>(null);
+  const [accessIssueKind, setAccessIssueKind] = useState<AccessIssueKind>(null);
+  const [selected, setSelected] = useState<FileEntry | null>(null);
   const [clipboard, setClipboard] = useState<ClipboardState>(null);
   const [editorMode, setEditorMode] = useState<'rename' | 'folder' | 'file' | null>(null);
   const [editorValue, setEditorValue] = useState('');
+  const [aboutVisible, setAboutVisible] = useState(false);
+  const permissionAlertShown = useRef(false);
+  const operationLock = useRef(false);
 
-  const title = useMemo(() => getPathLabel(stack), [stack]);
+  const currentPath = stack[stack.length - 1];
+  const colors = theme === 'dark' ? DARK : LIGHT;
+  const styles = useMemo(() => createStyles(colors, uiScale, insets.bottom), [colors, uiScale, insets.bottom]);
+  const title = stack.length === 1 ? 'Dahili Depolama' : baseName(currentPath);
 
-  const refresh = useCallback(async () => {
+  const persistSettings = useCallback((nextTheme: ThemeMode, nextScale: number) => {
+    void saveSettings({ theme: nextTheme, scale: nextScale });
+  }, []);
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    persistSettings(next, uiScale);
+  };
+
+  const changeScale = (delta: number) => {
+    const next = clampScale(uiScale + delta);
+    setUiScale(next);
+    persistSettings(theme, next);
+  };
+
+  const refreshPath = useCallback(async (path: string) => {
     setLoading(true);
     try {
-      const listed = currentDir.list();
-      listed.sort((a, b) => {
-        const aDir = isDirectory(a);
-        const bDir = isDirectory(b);
-        if (aDir !== bDir) return aDir ? -1 : 1;
-        return a.name.localeCompare(b.name, 'tr', { sensitivity: 'base' });
-      });
-      setItems([...listed]);
+      const listed = await readDirectory(path);
+      setItems(listed);
       setAccessError(null);
+      setAccessIssueKind(null);
+      if (normalizePath(path) === normalizePath(ROOT_PATH)) {
+        const usable = await verifyStorageAccess();
+        setStorageReady(usable);
+        if (!usable) {
+          setItems([]);
+          setAccessIssueKind('permission');
+          setAccessError('Depolama okunabiliyor olabilir ancak dosya yazma yetkisi yok. “Tüm dosyalara erişim” özel iznini açın.');
+        }
+      }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? 'Depolamaya erişilemiyor.');
       setItems([]);
-      setAccessError(error instanceof Error ? error.message : 'Depolamaya erişilemiyor.');
+      setAccessError(message);
+      if (isProtectedAndroidPath(path)) {
+        setAccessIssueKind('protected');
+      } else {
+        const usable = await verifyStorageAccess();
+        setStorageReady(usable);
+        setAccessIssueKind(usable ? 'folder' : 'permission');
+      }
     } finally {
       setLoading(false);
     }
-  }, [currentDir]);
+  }, []);
+
+  const refresh = useCallback(async () => {
+    await refreshPath(currentPath);
+  }, [currentPath, refreshPath]);
+
+  const requestStorageAccess = useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+
+    try {
+      const api = Number(Platform.Version);
+      if (api >= 30) {
+        await NativeStorage.openAllFilesAccessSettings();
+      } else {
+        await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+          PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+        ]);
+        await refreshPath(currentPath);
+      }
+    } catch (error) {
+      Alert.alert(
+        'İzin ekranı açılamadı',
+        error instanceof Error ? error.message : 'Android özel dosya erişimi ekranı açılamadı.'
+      );
+    }
+  }, [currentPath, refreshPath]);
+
+  const showFsError = useCallback((heading: string, error: unknown, targetPath?: string) => {
+    const message = error instanceof Error ? error.message : String(error ?? 'Bilinmeyen hata');
+    const path = targetPath || currentPath;
+
+    if (isProtectedAndroidPath(path)) {
+      Alert.alert(
+        heading,
+        `${message}\n\nAndroid, diğer uygulamalara ait Android/data ve Android/obb içeriklerini sistem düzeyinde korur. Bu özel klasörlerde işlem yapılamaz.`
+      );
+      return;
+    }
+
+    if (looksLikePermissionError(error) || !storageReady) {
+      Alert.alert(
+        heading,
+        `${message}\n\n“Uygulama izinleri” sayfası yeterli değildir. Açılan özel “Tüm dosyalara erişim” ekranında Simple File Manager anahtarının açık olduğundan emin olun.`,
+        [
+          { text: 'Vazgeç', style: 'cancel' },
+          { text: 'Özel İzin Ekranını Aç', onPress: () => void requestStorageAccess() },
+        ]
+      );
+      return;
+    }
+
+    Alert.alert(heading, message);
+  }, [currentPath, requestStorageAccess, storageReady]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let mounted = true;
+    void (async () => {
+      const settings = await loadSettings(initialTheme);
+      if (!mounted) return;
+      setTheme(settings.theme);
+      setUiScale(settings.scale);
+      await refreshPath(ROOT_PATH);
+      if (mounted) setBooting(false);
+    })();
+    return () => { mounted = false; };
+  }, [initialTheme, refreshPath]);
+
+  useEffect(() => {
+    if (booting || storageReady || permissionAlertShown.current || Platform.OS !== 'android') return;
+    permissionAlertShown.current = true;
+    const timer = setTimeout(() => {
+      Alert.alert(
+        'Dosya erişimi gerekli',
+        'Simple File Manager için Android’in özel “Tüm dosyalara erişim” yetkisini açmanız gerekiyor. Normal uygulama izinleri ekranından farklıdır.',
+        [
+          { text: 'Sonra', style: 'cancel' },
+          { text: 'İzin Ekranını Aç', onPress: () => void requestStorageAccess() },
+        ]
+      );
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [booting, requestStorageAccess, storageReady]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', state => {
-      if (state === 'active') void refresh();
+      if (state === 'active' && !booting) {
+        void refreshPath(currentPath);
+      }
     });
     return () => subscription.remove();
-  }, [refresh]);
+  }, [booting, currentPath, refreshPath]);
+
+  useEffect(() => {
+    if (!booting) void refreshPath(currentPath);
+  }, [currentPath]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (aboutVisible) {
+        setAboutVisible(false);
+        return true;
+      }
       if (selected) {
         setSelected(null);
+        return true;
+      }
+      if (editorMode) {
+        setEditorMode(null);
         return true;
       }
       if (stack.length > 1) {
@@ -124,33 +407,25 @@ export default function App() {
       return false;
     });
     return () => sub.remove();
-  }, [selected, stack.length]);
+  }, [aboutVisible, editorMode, selected, stack.length]);
 
-  const requestStorageAccess = async () => {
-    if (Platform.OS !== 'android') return;
-
-    const api = Number(Platform.Version);
-    try {
-      if (api >= 30) {
-        await Linking.sendIntent('android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION');
-      } else {
-        await PermissionsAndroid.requestMultiple([
-          PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-          PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
-        ]);
-        await refresh();
-      }
-    } catch {
-      await Linking.openSettings();
-    }
-  };
-
-  const enterDirectory = (dir: Directory) => {
-    setStack(previous => [...previous, dir]);
+  const enterDirectory = (item: FileEntry) => {
+    setSelected(null);
+    setStack(previous => [...previous, item.path]);
   };
 
   const goUp = () => {
+    setSelected(null);
     if (stack.length > 1) setStack(previous => previous.slice(0, -1));
+  };
+
+  const openFile = async (item: FileEntry) => {
+    if (Platform.OS !== 'android') return;
+    try {
+      await NativeStorage.openFile(item.path, mimeTypeForName(item.name));
+    } catch (error) {
+      showFsError('Dosya açılamadı', error, item.path);
+    }
   };
 
   const startRename = () => {
@@ -166,30 +441,36 @@ export default function App() {
   };
 
   const saveEditor = async () => {
+    if (operationLock.current) return;
+
     const name = cleanName(editorValue);
     if (!isValidName(name)) {
-      Alert.alert('Geçersiz ad', 'Dosya veya klasör adında / karakteri kullanılamaz.');
+      Alert.alert('Geçersiz ad', 'Dosya veya klasör adında / veya \\ karakteri kullanılamaz.');
       return;
     }
 
+    operationLock.current = true;
     try {
+      if (!storageReady) throw new Error('Dosya yazma yetkisi doğrulanamadı.');
+      const destination = joinPath(currentPath, name);
+      if (await NativeStorage.exists(destination)) throw new Error('Bu isimde bir dosya veya klasör zaten var.');
+
       if (editorMode === 'rename' && selected) {
-        selected.rename(name);
+        await NativeStorage.move(selected.path, destination);
         setSelected(null);
       } else if (editorMode === 'folder') {
-        const dir = new Directory(currentDir, name);
-        if (dir.exists) throw new Error('Bu isimde bir klasör zaten var.');
-        dir.create();
+        await NativeStorage.mkdir(destination);
       } else if (editorMode === 'file') {
-        const file = new File(currentDir, name);
-        if (file.exists) throw new Error('Bu isimde bir dosya zaten var.');
-        file.create();
+        await NativeStorage.createFile(destination);
       }
+
       setEditorMode(null);
       setEditorValue('');
       await refresh();
     } catch (error) {
-      Alert.alert('İşlem başarısız', error instanceof Error ? error.message : 'Bilinmeyen hata');
+      showFsError('İşlem başarısız', error, currentPath);
+    } finally {
+      operationLock.current = false;
     }
   };
 
@@ -198,7 +479,7 @@ export default function App() {
     const item = selected;
     Alert.alert(
       'Silinsin mi?',
-      isDirectory(item)
+      item.isDirectory
         ? `“${item.name}” klasörü ve içindekiler kalıcı olarak silinecek.`
         : `“${item.name}” kalıcı olarak silinecek.`,
       [
@@ -207,12 +488,17 @@ export default function App() {
           text: 'Sil',
           style: 'destructive',
           onPress: async () => {
+            if (operationLock.current) return;
+            operationLock.current = true;
             try {
-              item.delete();
+              if (!storageReady) throw new Error('Dosya yazma yetkisi doğrulanamadı.');
+              await NativeStorage.delete(item.path);
               setSelected(null);
               await refresh();
             } catch (error) {
-              Alert.alert('Silinemedi', error instanceof Error ? error.message : 'Bilinmeyen hata');
+              showFsError('Silinemedi', error, item.path);
+            } finally {
+              operationLock.current = false;
             }
           },
         },
@@ -222,68 +508,128 @@ export default function App() {
 
   const setClipboardFromSelected = (mode: ClipboardMode) => {
     if (!selected) return;
-    setClipboard({ mode, item: selected, isDirectory: isDirectory(selected) });
+    setClipboard({ mode, item: selected });
     setSelected(null);
   };
 
   const paste = async () => {
-    if (!clipboard) return;
-
+    if (!clipboard || operationLock.current) return;
     const source = clipboard.item;
-    const sourceUri = normalizeUri(source.uri);
-    const destinationFolderUri = normalizeUri(currentDir.uri);
+    const destination = joinPath(currentPath, source.name);
+    const sourceNormalized = normalizePath(source.path);
+    const destinationNormalized = normalizePath(destination);
 
-    if (clipboard.isDirectory && destinationFolderUri.startsWith(sourceUri)) {
+    if (source.isDirectory && `${normalizePath(currentPath)}/`.startsWith(`${sourceNormalized}/`)) {
       Alert.alert('Geçersiz hedef', 'Bir klasör kendi içine veya alt klasörlerinden birine kopyalanamaz/taşınamaz.');
       return;
     }
-
-    const destination = cloneDestination(source, currentDir);
-    if (destination.uri === source.uri) {
+    if (destinationNormalized === sourceNormalized) {
       Alert.alert('Aynı klasör', 'Kaynak ve hedef aynı.');
       return;
     }
-    if (destination.exists) {
-      Alert.alert('İsim çakışması', `Hedefte “${source.name}” isminde bir öğe zaten var.`);
-      return;
-    }
 
+    operationLock.current = true;
     try {
+      if (!storageReady) throw new Error('Dosya yazma yetkisi doğrulanamadı.');
+      if (await NativeStorage.exists(destination)) throw new Error(`Hedefte “${source.name}” isminde bir öğe zaten var.`);
+
       if (clipboard.mode === 'copy') {
-        await source.copy(destination);
+        await NativeStorage.copy(source.path, destination);
+        Alert.alert('Kopyalandı', `“${source.name}” bu klasöre kopyalandı.`);
       } else {
-        await source.move(destination);
+        await NativeStorage.move(source.path, destination);
         setClipboard(null);
       }
       await refresh();
-      if (clipboard.mode === 'copy') {
-        Alert.alert('Kopyalandı', `“${source.name}” bu klasöre kopyalandı.`);
-      }
     } catch (error) {
-      Alert.alert('İşlem başarısız', error instanceof Error ? error.message : 'Bilinmeyen hata');
+      showFsError('İşlem başarısız', error, currentPath);
+    } finally {
+      operationLock.current = false;
     }
   };
 
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
+  const sendFeedback = async (kind: 'Hata Bildirimi' | 'Özellik Talebi' | 'Düzenleme Talebi') => {
+    const subject = `[${APP_NAME}] ${kind}`;
+    const body = `${kind}\n\nAçıklama:\n\nCihaz / Android sürümü (varsa):\n`;
+    const url = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    try {
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('E-posta açılamadı', `İletişim: ${CONTACT_EMAIL}`);
+    }
+  };
 
-      <View style={styles.header}>
+  if (booting) {
+    return (
+      <SafeAreaView style={styles.bootSafe} edges={['top', 'bottom', 'left', 'right']}>
+        <StatusBar style="light" />
+        <View style={styles.bootContent}>
+          <Image source={require('./assets/icon.png')} style={styles.bootLogo} resizeMode="contain" />
+          <Text style={styles.bootTitle}>{APP_NAME}</Text>
+          <ActivityIndicator size="large" color="#6d91ff" style={styles.bootSpinner} />
+          <Text style={styles.bootText}>Açılıyor…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
+
+      <View style={styles.brandBar}>
+        <Image source={require('./assets/icon.png')} style={styles.logoImage} resizeMode="contain" />
+        <View style={styles.brandTextWrap}>
+          <Text style={styles.brandTitle} numberOfLines={1}>{APP_NAME}</Text>
+          <Text style={styles.brandSubtitle} numberOfLines={1}>Dosya Yöneticisi</Text>
+        </View>
+        <Pressable
+          accessibilityLabel="Görünümü küçült"
+          onPress={() => changeScale(-SCALE_STEP)}
+          disabled={uiScale <= MIN_SCALE}
+          style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed, uiScale <= MIN_SCALE && styles.disabled]}
+        >
+          <Text style={styles.scaleButtonText}>A−</Text>
+        </Pressable>
+        <Pressable
+          accessibilityLabel="Görünümü büyüt"
+          onPress={() => changeScale(SCALE_STEP)}
+          disabled={uiScale >= MAX_SCALE}
+          style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed, uiScale >= MAX_SCALE && styles.disabled]}
+        >
+          <Text style={styles.scaleButtonText}>A+</Text>
+        </Pressable>
+        <Pressable
+          accessibilityLabel={theme === 'dark' ? 'Açık temaya geç' : 'Karanlık temaya geç'}
+          onPress={toggleTheme}
+          style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed]}
+        >
+          <Text style={styles.brandButtonText}>{theme === 'dark' ? '☀' : '☾'}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityLabel="Hakkında"
+          onPress={() => setAboutVisible(true)}
+          style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed]}
+        >
+          <Text style={styles.brandButtonText}>ⓘ</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.navHeader}>
         <Pressable
           accessibilityLabel="Üst klasöre çık"
           onPress={goUp}
           disabled={stack.length === 1}
-          style={[styles.headerButton, stack.length === 1 && styles.headerButtonDisabled]}
+          style={[styles.headerButton, stack.length === 1 && styles.disabled]}
         >
           <Text style={styles.headerButtonText}>‹</Text>
         </Pressable>
-
         <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
-          <Text style={styles.headerPath} numberOfLines={1}>{currentDir.uri.replace('file://', '')}</Text>
+          <Text style={styles.headerPath} numberOfLines={1}>{currentPath}</Text>
         </View>
-
-        <Pressable onPress={() => void refresh()} style={styles.smallHeaderButton}>
+        <View style={[styles.accessDot, { backgroundColor: storageReady ? colors.success : colors.danger }]} />
+        <Pressable onPress={() => void refresh()} style={styles.smallHeaderButton} accessibilityLabel="Yenile">
           <Text style={styles.smallHeaderButtonText}>↻</Text>
         </Pressable>
       </View>
@@ -305,66 +651,85 @@ export default function App() {
         </View>
       )}
 
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" />
-          <Text style={styles.muted}>Dosyalar okunuyor…</Text>
-        </View>
-      ) : accessError ? (
-        <View style={styles.center}>
-          <Text style={styles.lockIcon}>🔒</Text>
-          <Text style={styles.accessTitle}>Depolama erişimi gerekli</Text>
-          <Text style={styles.accessText}>
-            Android ayarlarından “Tüm dosyalara erişim” iznini Dosya Yöneticisi için aç.
-          </Text>
-          <Pressable style={styles.primaryButton} onPress={() => void requestStorageAccess()}>
-            <Text style={styles.primaryButtonText}>Erişim Ayarını Aç</Text>
-          </Pressable>
-          <Pressable style={styles.secondaryButton} onPress={() => void refresh()}>
-            <Text style={styles.secondaryButtonText}>Tekrar Dene</Text>
-          </Pressable>
-        </View>
-      ) : (
-        <FlatList
-          data={items}
-          keyExtractor={item => item.uri}
-          contentContainerStyle={items.length === 0 ? styles.emptyList : styles.listContent}
-          ListEmptyComponent={
-            <View style={styles.center}>
-              <Text style={styles.muted}>Bu klasör boş.</Text>
-            </View>
-          }
-          renderItem={({ item }) => {
-            const dir = isDirectory(item);
-            return (
+      <View style={styles.content}>
+        {loading ? (
+          <View style={styles.center}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={styles.muted}>Dosyalar okunuyor…</Text>
+          </View>
+        ) : accessError ? (
+          <View style={styles.center}>
+            <Text style={styles.lockIcon}>{accessIssueKind === 'protected' ? '🛡️' : '🔒'}</Text>
+            <Text style={styles.accessTitle}>
+              {accessIssueKind === 'protected' ? 'Android tarafından korunan klasör' : accessIssueKind === 'permission' ? 'Dosya erişimi gerekli' : 'Klasör açılamadı'}
+            </Text>
+            <Text style={styles.accessText}>
+              {accessIssueKind === 'protected'
+                ? 'Android/data ve Android/obb içindeki diğer uygulama verileri Android tarafından ayrıca korunur.'
+                : accessIssueKind === 'permission'
+                  ? 'Normal “Uygulama izinleri” ekranı yeterli değildir. Android’in özel “Tüm dosyalara erişim” ekranında Simple File Manager anahtarını açın.'
+                  : 'Bu klasör cihaz veya sistem tarafından kısıtlanıyor olabilir.'}
+            </Text>
+            {accessIssueKind === 'permission' && (
+              <Pressable style={styles.primaryButton} onPress={() => void requestStorageAccess()}>
+                <Text style={styles.primaryButtonText}>Özel Dosya Erişimi İznini Aç</Text>
+              </Pressable>
+            )}
+            {stack.length > 1 && (
+              <Pressable style={styles.secondaryButton} onPress={goUp}>
+                <Text style={styles.secondaryButtonText}>Üst Klasöre Dön</Text>
+              </Pressable>
+            )}
+            <Pressable style={styles.secondaryButton} onPress={() => void refresh()}>
+              <Text style={styles.secondaryButtonText}>Tekrar Dene</Text>
+            </Pressable>
+            <Text style={styles.errorDetail} numberOfLines={4}>{accessError}</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={items}
+            keyExtractor={item => item.path}
+            contentContainerStyle={items.length === 0 ? styles.emptyList : styles.listContent}
+            ListEmptyComponent={
+              <View style={styles.center}>
+                <Text style={styles.muted}>Bu klasör boş.</Text>
+              </View>
+            }
+            renderItem={({ item }) => (
               <Pressable
                 style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-                onPress={() => dir ? enterDirectory(item) : setSelected(item)}
+                onPress={() => item.isDirectory ? enterDirectory(item) : void openFile(item)}
                 onLongPress={() => setSelected(item)}
               >
-                <Text style={styles.icon}>{dir ? '📁' : '📄'}</Text>
+                <Text style={styles.icon}>{item.isDirectory ? '📁' : '📄'}</Text>
                 <View style={styles.rowText}>
                   <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
-                  <Text style={styles.metaText}>{dir ? 'Klasör' : formatSize(item.size)}</Text>
+                  <Text style={styles.metaText}>{item.isDirectory ? 'Klasör' : formatSize(item.size)}</Text>
                 </View>
                 <Pressable hitSlop={10} onPress={() => setSelected(item)} style={styles.moreButton}>
                   <Text style={styles.moreText}>⋮</Text>
                 </Pressable>
               </Pressable>
-            );
-          }}
-        />
-      )}
+            )}
+          />
+        )}
+      </View>
 
       {!accessError && !loading && (
         <View style={styles.bottomBar}>
-          <Pressable style={styles.bottomAction} onPress={() => startCreate('folder')}>
-            <Text style={styles.bottomActionIcon}>📁＋</Text>
-            <Text style={styles.bottomActionText}>Klasör</Text>
+          <Pressable style={({ pressed }) => [styles.bottomAction, pressed && styles.bottomActionPressed]} onPress={() => startCreate('folder')}>
+            <View style={styles.addIconWrap}>
+              <Text style={styles.bottomActionIcon}>📁</Text>
+              <View style={styles.addIconBadge}><Text style={styles.addIconPlus}>+</Text></View>
+            </View>
+            <Text style={styles.bottomActionText}>Klasör oluştur</Text>
           </Pressable>
-          <Pressable style={styles.bottomAction} onPress={() => startCreate('file')}>
-            <Text style={styles.bottomActionIcon}>📄＋</Text>
-            <Text style={styles.bottomActionText}>Dosya</Text>
+          <Pressable style={({ pressed }) => [styles.bottomAction, pressed && styles.bottomActionPressed]} onPress={() => startCreate('file')}>
+            <View style={styles.addIconWrap}>
+              <Text style={styles.bottomActionIcon}>📄</Text>
+              <View style={styles.addIconBadge}><Text style={styles.addIconPlus}>+</Text></View>
+            </View>
+            <Text style={styles.bottomActionText}>Dosya oluştur</Text>
           </Pressable>
         </View>
       )}
@@ -373,6 +738,18 @@ export default function App() {
         <Pressable style={styles.overlay} onPress={() => setSelected(null)}>
           <Pressable style={styles.sheet} onPress={() => {}}>
             <Text style={styles.sheetTitle} numberOfLines={2}>{selected?.name}</Text>
+            {selected && !selected.isDirectory && (
+              <Pressable
+                style={styles.sheetAction}
+                onPress={() => {
+                  const item = selected;
+                  setSelected(null);
+                  void openFile(item);
+                }}
+              >
+                <Text style={styles.sheetActionText}>Aç</Text>
+              </Pressable>
+            )}
             <Pressable style={styles.sheetAction} onPress={() => setClipboardFromSelected('copy')}>
               <Text style={styles.sheetActionText}>Kopyala</Text>
             </Pressable>
@@ -393,7 +770,7 @@ export default function App() {
       </Modal>
 
       <Modal visible={editorMode !== null} transparent animationType="fade" onRequestClose={() => setEditorMode(null)}>
-        <View style={styles.overlay}>
+        <View style={styles.dialogOverlay}>
           <View style={styles.dialog}>
             <Text style={styles.dialogTitle}>
               {editorMode === 'rename' ? 'Yeniden adlandır' : editorMode === 'folder' ? 'Yeni klasör' : 'Yeni dosya'}
@@ -403,6 +780,7 @@ export default function App() {
               value={editorValue}
               onChangeText={setEditorValue}
               style={styles.input}
+              placeholderTextColor={colors.textMuted}
               selectTextOnFocus={editorMode === 'rename'}
               onSubmitEditing={() => void saveEditor()}
             />
@@ -417,109 +795,187 @@ export default function App() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={aboutVisible} transparent animationType="fade" onRequestClose={() => setAboutVisible(false)}>
+        <Pressable style={styles.overlay} onPress={() => setAboutVisible(false)}>
+          <Pressable style={styles.aboutSheet} onPress={() => {}}>
+            <View style={styles.aboutBrandRow}>
+              <Image source={require('./assets/icon.png')} style={styles.aboutLogo} resizeMode="contain" />
+              <View style={styles.aboutBrandText}>
+                <Text style={styles.aboutTitle}>{APP_NAME}</Text>
+                <Text style={styles.aboutVersion}>Sürüm {APP_VERSION}</Text>
+              </View>
+            </View>
+            <Text style={styles.aboutText}>Basit, çevrimdışı ve kişisel kullanım odaklı Android dosya yöneticisi.</Text>
+            <Text style={styles.aboutSectionTitle}>İletişim</Text>
+            <Pressable onPress={() => void Linking.openURL(`mailto:${CONTACT_EMAIL}`)}>
+              <Text style={styles.emailText}>{CONTACT_EMAIL}</Text>
+            </Pressable>
+            {Platform.OS === 'android' && (
+              <Pressable style={styles.storageSettingsButton} onPress={() => void requestStorageAccess()}>
+                <Text style={styles.storageSettingsButtonText}>Özel dosya erişimi ayarını aç</Text>
+              </Pressable>
+            )}
+            <Text style={styles.aboutHint}>Hata, özellik veya düzenleme talebinizi e-posta ile iletebilirsiniz.</Text>
+            <View style={styles.feedbackButtons}>
+              <Pressable style={styles.feedbackButton} onPress={() => void sendFeedback('Hata Bildirimi')}>
+                <Text style={styles.feedbackButtonText}>Hata bildir</Text>
+              </Pressable>
+              <Pressable style={styles.feedbackButton} onPress={() => void sendFeedback('Özellik Talebi')}>
+                <Text style={styles.feedbackButtonText}>Özellik iste</Text>
+              </Pressable>
+              <Pressable style={styles.feedbackButton} onPress={() => void sendFeedback('Düzenleme Talebi')}>
+                <Text style={styles.feedbackButtonText}>Düzenleme iste</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.sheetCancel} onPress={() => setAboutVisible(false)}>
+              <Text style={styles.sheetCancelText}>Kapat</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#f7f7f8' },
-  header: {
-    minHeight: 68,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#d8d8dc',
-    backgroundColor: '#ffffff',
-  },
-  headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  headerButtonDisabled: { opacity: 0.25 },
-  headerButtonText: { fontSize: 38, lineHeight: 40, color: '#111114' },
-  smallHeaderButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  smallHeaderButtonText: { fontSize: 26, color: '#111114' },
-  headerTitleWrap: { flex: 1, minWidth: 0 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#111114' },
-  headerPath: { marginTop: 2, fontSize: 11, color: '#77777d' },
-  clipboardBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    backgroundColor: '#eef3ff',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#ccd8f3',
-  },
-  clipboardTextWrap: { flex: 1 },
-  clipboardTitle: { fontSize: 13, fontWeight: '700', color: '#1d2b4d' },
-  clipboardHint: { marginTop: 1, fontSize: 11, color: '#56617a' },
-  pasteButton: { backgroundColor: '#1f5eff', paddingHorizontal: 13, paddingVertical: 9, borderRadius: 9 },
-  pasteButtonText: { color: '#fff', fontWeight: '700', fontSize: 13 },
-  cancelClipboardButton: { padding: 5 },
-  cancelClipboardText: { fontSize: 24, color: '#56617a' },
-  listContent: { paddingBottom: 88 },
-  emptyList: { flexGrow: 1, paddingBottom: 88 },
-  row: {
-    minHeight: 66,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingLeft: 14,
-    paddingRight: 6,
-    backgroundColor: '#fff',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e2e2e5',
-  },
-  rowPressed: { backgroundColor: '#f0f0f2' },
-  icon: { width: 42, fontSize: 27 },
-  rowText: { flex: 1, minWidth: 0 },
-  fileName: { fontSize: 15.5, fontWeight: '600', color: '#18181b' },
-  metaText: { marginTop: 4, fontSize: 12, color: '#7a7a80' },
-  moreButton: { width: 46, height: 54, alignItems: 'center', justifyContent: 'center' },
-  moreText: { fontSize: 25, color: '#6a6a70' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28 },
-  muted: { marginTop: 12, color: '#73737a', textAlign: 'center' },
-  lockIcon: { fontSize: 42, marginBottom: 12 },
-  accessTitle: { fontSize: 20, fontWeight: '800', color: '#17171a', textAlign: 'center' },
-  accessText: { marginTop: 10, maxWidth: 350, color: '#65656c', fontSize: 14, lineHeight: 20, textAlign: 'center' },
-  primaryButton: { marginTop: 22, backgroundColor: '#1f5eff', paddingHorizontal: 18, paddingVertical: 12, borderRadius: 10 },
-  primaryButtonText: { color: '#fff', fontWeight: '800' },
-  secondaryButton: { marginTop: 10, paddingHorizontal: 18, paddingVertical: 11 },
-  secondaryButtonText: { color: '#1f5eff', fontWeight: '700' },
-  bottomBar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 76,
-    flexDirection: 'row',
-    backgroundColor: '#ffffff',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#d7d7da',
-  },
-  bottomAction: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  bottomActionIcon: { fontSize: 22 },
-  bottomActionText: { marginTop: 4, fontSize: 12, fontWeight: '700', color: '#303035' },
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'flex-end' },
-  sheet: {
-    width: '100%',
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 16,
-    paddingBottom: 28,
-  },
-  sheetTitle: { fontSize: 17, fontWeight: '800', color: '#18181b', paddingHorizontal: 4, paddingBottom: 10 },
-  sheetAction: { minHeight: 50, justifyContent: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#ececef' },
-  sheetActionText: { fontSize: 16, color: '#222226' },
-  dangerText: { color: '#c62828', fontWeight: '700' },
-  sheetCancel: { marginTop: 8, minHeight: 48, justifyContent: 'center', alignItems: 'center', borderRadius: 10, backgroundColor: '#f1f1f3' },
-  sheetCancelText: { fontSize: 15, fontWeight: '700', color: '#333338' },
-  dialog: { width: '88%', maxWidth: 420, alignSelf: 'center', marginBottom: '55%', backgroundColor: '#fff', borderRadius: 16, padding: 18 },
-  dialogTitle: { fontSize: 18, fontWeight: '800', color: '#17171a' },
-  input: { marginTop: 16, borderWidth: 1, borderColor: '#c9c9ce', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11, fontSize: 16, color: '#17171a' },
-  dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 18 },
-  dialogButton: { minWidth: 84, paddingHorizontal: 14, paddingVertical: 11, alignItems: 'center', borderRadius: 9 },
-  dialogSaveButton: { backgroundColor: '#1f5eff' },
-  dialogCancelText: { color: '#5c5c63', fontWeight: '700' },
-  dialogSaveText: { color: '#fff', fontWeight: '800' },
-});
+export default function App() {
+  return (
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <AppContent />
+    </SafeAreaProvider>
+  );
+}
+
+function createStyles(colors: Palette, scale: number, bottomInset: number) {
+  const font = (value: number) => Math.round(value * scale * 10) / 10;
+  const rowHeight = Math.max(58, Math.round(66 * scale));
+  const iconSize = font(27);
+
+  return StyleSheet.create({
+    bootSafe: { flex: 1, backgroundColor: '#0F172A' },
+    bootContent: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 30 },
+    bootLogo: { width: 136, height: 136, borderRadius: 30 },
+    bootTitle: { marginTop: 22, color: '#ffffff', fontSize: 24, fontWeight: '900' },
+    bootSpinner: { marginTop: 28 },
+    bootText: { marginTop: 13, color: '#cbd5e1', fontSize: 15, fontWeight: '600' },
+    safeArea: { flex: 1, backgroundColor: colors.surface },
+    content: { flex: 1, backgroundColor: colors.background },
+    brandBar: {
+      minHeight: 60,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 9,
+      gap: 3,
+      backgroundColor: colors.surface,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    logoImage: { width: 40, height: 40, borderRadius: 10, marginRight: 5 },
+    brandTextWrap: { flex: 1, minWidth: 0 },
+    brandTitle: { color: colors.text, fontSize: 15.5, fontWeight: '800' },
+    brandSubtitle: { marginTop: 1, color: colors.textMuted, fontSize: 10.5, fontWeight: '600' },
+    brandButton: { minWidth: 35, height: 38, paddingHorizontal: 5, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+    brandButtonPressed: { backgroundColor: colors.pressed },
+    brandButtonText: { color: colors.text, fontSize: 20, fontWeight: '700' },
+    scaleButtonText: { color: colors.text, fontSize: 13, fontWeight: '800' },
+    disabled: { opacity: 0.28 },
+    navHeader: {
+      minHeight: 62,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 8,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    headerButtonText: { fontSize: 38, lineHeight: 40, color: colors.text },
+    smallHeaderButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    smallHeaderButtonText: { fontSize: 26, color: colors.text },
+    headerTitleWrap: { flex: 1, minWidth: 0 },
+    headerTitle: { fontSize: font(17), fontWeight: '700', color: colors.text },
+    headerPath: { marginTop: 2, fontSize: font(10.5), color: colors.textMuted },
+    accessDot: { width: 9, height: 9, borderRadius: 5, marginHorizontal: 4 },
+    clipboardBar: {
+      flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 9,
+      backgroundColor: colors.primarySoft, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
+    },
+    clipboardTextWrap: { flex: 1 },
+    clipboardTitle: { fontSize: font(13), fontWeight: '700', color: colors.text },
+    clipboardHint: { marginTop: 1, fontSize: font(10.5), color: colors.textMuted },
+    pasteButton: { backgroundColor: colors.primary, paddingHorizontal: 13, paddingVertical: 9, borderRadius: 9 },
+    pasteButtonText: { color: colors.primaryText, fontWeight: '800', fontSize: font(12.5) },
+    cancelClipboardButton: { padding: 5 },
+    cancelClipboardText: { fontSize: 24, color: colors.textMuted },
+    listContent: { paddingBottom: 8 },
+    emptyList: { flexGrow: 1 },
+    row: {
+      minHeight: rowHeight, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 6,
+      backgroundColor: colors.surface, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
+    },
+    rowPressed: { backgroundColor: colors.pressed },
+    icon: { width: Math.max(42, Math.round(44 * scale)), fontSize: iconSize },
+    rowText: { flex: 1, minWidth: 0 },
+    fileName: { fontSize: font(15.5), fontWeight: '600', color: colors.text },
+    metaText: { marginTop: 4, fontSize: font(11.5), color: colors.textMuted },
+    moreButton: { width: 46, minHeight: rowHeight - 8, alignItems: 'center', justifyContent: 'center' },
+    moreText: { fontSize: font(24), color: colors.textMuted },
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28 },
+    muted: { marginTop: 12, color: colors.textMuted, textAlign: 'center', fontSize: font(14) },
+    lockIcon: { fontSize: 42, marginBottom: 12 },
+    accessTitle: { fontSize: font(20), fontWeight: '800', color: colors.text, textAlign: 'center' },
+    accessText: { marginTop: 10, maxWidth: 390, color: colors.textMuted, fontSize: font(13.5), lineHeight: font(20), textAlign: 'center' },
+    primaryButton: { marginTop: 22, backgroundColor: colors.primary, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 10 },
+    primaryButtonText: { color: colors.primaryText, fontWeight: '800', fontSize: font(14), textAlign: 'center' },
+    secondaryButton: { marginTop: 9, paddingHorizontal: 18, paddingVertical: 10 },
+    secondaryButtonText: { color: colors.primary, fontWeight: '700', fontSize: font(14) },
+    errorDetail: { marginTop: 12, color: colors.textMuted, fontSize: 10, textAlign: 'center', opacity: 0.8 },
+    bottomBar: {
+      minHeight: Math.max(70, Math.round(74 * scale)) + bottomInset,
+      flexDirection: 'row', backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border, paddingBottom: Math.max(bottomInset, 8), paddingTop: 3,
+    },
+    bottomAction: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 10, marginHorizontal: 4 },
+    bottomActionPressed: { backgroundColor: colors.pressed },
+    addIconWrap: { width: font(31), height: font(28), alignItems: 'center', justifyContent: 'center', position: 'relative' },
+    bottomActionIcon: { fontSize: font(23), lineHeight: font(27) },
+    addIconBadge: {
+      position: 'absolute', right: -1, bottom: 0, width: font(14), height: font(14), borderRadius: font(7),
+      alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary, borderWidth: 1.5, borderColor: colors.surface,
+    },
+    addIconPlus: { color: colors.primaryText, fontSize: font(11), lineHeight: font(12), fontWeight: '900' },
+    bottomActionText: { marginTop: 4, fontSize: font(11.5), fontWeight: '700', color: colors.text },
+    overlay: { flex: 1, backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'flex-end' },
+    dialogOverlay: { flex: 1, backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'center', padding: 20 },
+    sheet: { width: '100%', backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, paddingBottom: 20 + bottomInset },
+    sheetTitle: { fontSize: font(17), fontWeight: '800', color: colors.text, paddingHorizontal: 4, paddingBottom: 10 },
+    sheetAction: { minHeight: 50, justifyContent: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+    sheetActionText: { fontSize: font(15.5), color: colors.text },
+    dangerText: { color: colors.danger, fontWeight: '700' },
+    sheetCancel: { marginTop: 10, minHeight: 48, justifyContent: 'center', alignItems: 'center', borderRadius: 10, backgroundColor: colors.surfaceAlt },
+    sheetCancelText: { fontSize: font(14.5), fontWeight: '700', color: colors.text },
+    dialog: { width: '100%', maxWidth: 420, backgroundColor: colors.surface, borderRadius: 16, padding: 18 },
+    dialogTitle: { fontSize: font(18), fontWeight: '800', color: colors.text },
+    input: { marginTop: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.input, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11, fontSize: font(16), color: colors.text },
+    dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 18 },
+    dialogButton: { minWidth: 84, paddingHorizontal: 14, paddingVertical: 11, alignItems: 'center', borderRadius: 9 },
+    dialogSaveButton: { backgroundColor: colors.primary },
+    dialogCancelText: { color: colors.textMuted, fontWeight: '700', fontSize: font(14) },
+    dialogSaveText: { color: colors.primaryText, fontWeight: '800', fontSize: font(14) },
+    aboutSheet: { width: '100%', backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 18, paddingBottom: 20 + bottomInset },
+    aboutBrandRow: { flexDirection: 'row', alignItems: 'center' },
+    aboutLogo: { width: 52, height: 52, borderRadius: 13, marginRight: 12 },
+    aboutBrandText: { flex: 1 },
+    aboutTitle: { color: colors.text, fontSize: font(20), fontWeight: '900' },
+    aboutVersion: { marginTop: 3, color: colors.textMuted, fontSize: font(12) },
+    aboutText: { marginTop: 18, color: colors.textMuted, fontSize: font(13.5), lineHeight: font(20) },
+    aboutSectionTitle: { marginTop: 18, color: colors.text, fontSize: font(14), fontWeight: '800' },
+    emailText: { marginTop: 6, color: colors.primary, fontSize: font(14.5), fontWeight: '700' },
+    storageSettingsButton: { marginTop: 12, alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 9, borderRadius: 9, backgroundColor: colors.primarySoft },
+    storageSettingsButtonText: { color: colors.primary, fontSize: font(12.5), fontWeight: '800' },
+    aboutHint: { marginTop: 10, color: colors.textMuted, fontSize: font(12.5), lineHeight: font(18) },
+    feedbackButtons: { flexDirection: 'row', gap: 7, marginTop: 14 },
+    feedbackButton: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6, borderRadius: 9, backgroundColor: colors.primarySoft },
+    feedbackButtonText: { color: colors.primary, fontSize: font(11.5), fontWeight: '800', textAlign: 'center' },
+  });
+}

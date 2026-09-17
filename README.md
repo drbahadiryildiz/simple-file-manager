@@ -1,31 +1,37 @@
-# Basit Dosya Yöneticisi
+# Simple File Manager v1.3
 
-Android için Expo/React Native tabanlı kişisel dosya yöneticisi.
+Android / Expo tabanlı kişisel dosya yöneticisi.
 
-## Özellikler
+## v1.3'te ana düzeltme
 
-- Dahili depolamayı listeleme
-- Klasörlerde gezinme
+Önceki sürümde React Native dosya sistemi katmanı Android'in geniş depolama izni açık olsa bile mevcut klasörlerin içeriğini okumada tutarsız davranabiliyordu.
+
+Bu sürümde dosya sistemi işlemleri yerel Expo Android modülü üzerinden doğrudan `java.io.File` ile yapılır. Android 11+ için erişim durumu `Environment.isExternalStorageManager()` ile kontrol edilir ve gerektiğinde uygulamanın özel "Tüm dosyalara erişim" ayarı açılır.
+
+Desteklenen işlemler:
+- Dahili ortak depolamayı listeleme
+- Klasörlere girme / geri çıkma
 - Dosya ve klasör oluşturma
 - Yeniden adlandırma
-- Kopyalama ve taşıma (hedef klasöre gidip Yapıştır)
-- Dosya ve klasör silme
-- Android 11+ için Tüm dosyalara erişim ayarına yönlendirme
+- Kopyalama / taşıma / yapıştırma
+- Silme
+- Dosyayı uygun Android uygulamasıyla açma
+- Açık / koyu tema
+- A− / A+ görünüm ölçeği
+- Safe-area uyumlu üst ve alt alan
+- Uygulama ikonu ve splash ekranı
+- Hakkında ve geri bildirim e-postası
 
-## APK oluşturma
+> Android'in sistem koruması nedeniyle `/Android/data` ve `/Android/obb` gibi bazı alanlar tüm dosyalara erişim verilse dahi kısıtlı olabilir.
 
-Node.js 22+ kurulu bir bilgisayarda:
+## Build
 
-```bash
-npm install
-npx eas-cli@latest login
-npx eas-cli@latest build -p android --profile preview
-```
+Bu klasör doğrudan mevcut GitHub / EAS proje kökünün üzerine kopyalanmak üzere hazırlanmıştır.
 
-İlk EAS çalıştırmasında Expo hesabı ve proje yapılandırması istenebilir. Build tamamlandığında EAS doğrudan kurulabilir `.apk` indirme bağlantısı verir.
+Native modül eklendiği için bu sürümde bir kez `npm install` çalıştırın. Sonra normal Git push ve EAS preview build yeterlidir.
 
-## İlk açılış
 
-Uygulama dosyaları okuyamazsa **Erişim Ayarını Aç** düğmesine basın. Android'in **Tüm dosyalara erişim** ekranında **Dosya Yöneticisi** uygulamasını etkinleştirin ve uygulamaya geri dönün.
-
-> Android'in koruduğu bazı uygulama-özel dizinleri (özellikle yeni Android sürümlerinde bazı `Android/data` içerikleri) sistem tarafından yine kısıtlanabilir.
+## v1.3.1
+- Emülatörde yeniden adlandırma sonrası görülen yanlış hata mesajı giderildi.
+- Taşıma/rename işlemleri çift tetiklemeye karşı kilitlendi ve native tarafta idempotent hale getirildi.
+- Alt çubuktaki klasör/dosya oluşturma artısı ikonun üzerine alındı.
