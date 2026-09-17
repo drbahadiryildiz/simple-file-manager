@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "Dosya Yöneticisi",
+    "slug": "simple-file-manager",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.local.simplefilemanager",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.MANAGE_EXTERNAL_STORAGE",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
+    }
+  }
+}
