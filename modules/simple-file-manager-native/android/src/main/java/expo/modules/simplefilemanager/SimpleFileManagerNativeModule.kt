@@ -320,7 +320,8 @@ class SimpleFileManagerNativeModule : Module() {
     }
   }
 
-  private fun copyRecursive(source: File, destination: File) {    if (source.isDirectory) {
+  private fun copyRecursive(source: File, destination: File) {
+    if (source.isDirectory) {
       if (!destination.exists() && !destination.mkdirs()) {
         throw IllegalStateException("Klasör oluşturulamadı: ${destination.absolutePath}")
       }
