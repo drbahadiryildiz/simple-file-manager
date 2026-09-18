@@ -47,9 +47,9 @@ class SimpleFileManagerNativeModule : Module() {
     AsyncFunction("list") { path: String ->
       ensureExternalAccessIfNeeded(path)
       val dir = File(path)
-      if (!dir.exists()) throw IllegalStateException("Klasör bulunamadı: $path")
-      if (!dir.isDirectory) throw IllegalStateException("Bu yol klasör değil: $path")
-      val files = dir.listFiles() ?: throw SecurityException("Klasör içeriği okunamadı: $path")
+      if (!dir.exists()) throw IllegalStateException("Folder not found: $path")
+      if (!dir.isDirectory) throw IllegalStateException("Path is not a folder: $path")
+      val files = dir.listFiles() ?: throw SecurityException("Folder contents could not be read: $path")
       files.map { file ->
         mapOf(
           "name" to file.name,
@@ -68,19 +68,19 @@ class SimpleFileManagerNativeModule : Module() {
     AsyncFunction("mkdir") { path: String ->
       ensureExternalAccessIfNeeded(path)
       val file = File(path)
-      if (file.exists()) throw IllegalStateException("Bu isimde bir öğe zaten var.")
-      if (!file.mkdirs()) throw IllegalStateException("Klasör oluşturulamadı: $path")
+      if (file.exists()) throw IllegalStateException("An item with this name already exists.")
+      if (!file.mkdirs()) throw IllegalStateException("Folder could not be created: $path")
       true
     }
 
     AsyncFunction("createFile") { path: String ->
       ensureExternalAccessIfNeeded(path)
       val file = File(path)
-      if (file.exists()) throw IllegalStateException("Bu isimde bir öğe zaten var.")
+      if (file.exists()) throw IllegalStateException("An item with this name already exists.")
       file.parentFile?.let { parent ->
-        if (!parent.exists() && !parent.mkdirs()) throw IllegalStateException("Üst klasör oluşturulamadı.")
+        if (!parent.exists() && !parent.mkdirs()) throw IllegalStateException("Parent folder could not be created.")
       }
-      if (!file.createNewFile()) throw IllegalStateException("Dosya oluşturulamadı: $path")
+      if (!file.createNewFile()) throw IllegalStateException("File could not be created: $path")
       true
     }
 
@@ -98,11 +98,11 @@ class SimpleFileManagerNativeModule : Module() {
       val src = File(source)
       val dst = File(destination)
 
-      if (!src.exists()) throw IllegalStateException("Kaynak bulunamadı: $source")
+      if (!src.exists()) throw IllegalStateException("Source not found: $source")
       if (sameFile(src, dst)) return@AsyncFunction true
 
       if (dst.exists()) {
-        if (!overwrite) throw IllegalStateException("Hedefte aynı isimde bir öğe zaten var.")
+        if (!overwrite) throw IllegalStateException("An item with the same name already exists at the destination.")
         replaceSafely(src, dst, deleteSource = false)
       } else {
         copyRecursive(src, dst)
@@ -119,17 +119,17 @@ class SimpleFileManagerNativeModule : Module() {
       // Aynı işlem UI tarafında çok hızlı iki kez tetiklenirse ilk çağrı kaynağı
       // taşımış olabilir. Hedef mevcut ve kaynak artık yoksa işlem tamamlanmıştır.
       if (!src.exists() && dst.exists()) return@AsyncFunction true
-      if (!src.exists()) throw IllegalStateException("Kaynak bulunamadı: $source")
+      if (!src.exists()) throw IllegalStateException("Source not found: $source")
       if (sameFile(src, dst)) return@AsyncFunction true
 
       if (dst.exists()) {
-        if (!overwrite) throw IllegalStateException("Hedefte aynı isimde bir öğe zaten var.")
+        if (!overwrite) throw IllegalStateException("An item with the same name already exists at the destination.")
         replaceSafely(src, dst, deleteSource = true)
         return@AsyncFunction true
       }
 
       dst.parentFile?.let { parent ->
-        if (!parent.exists() && !parent.mkdirs()) throw IllegalStateException("Hedef klasör hazırlanamadı.")
+        if (!parent.exists() && !parent.mkdirs()) throw IllegalStateException("Destination folder could not be prepared.")
       }
 
       if (!src.renameTo(dst)) {
@@ -137,14 +137,14 @@ class SimpleFileManagerNativeModule : Module() {
         deleteRecursive(src)
       }
 
-      if (!dst.exists()) throw IllegalStateException("Taşıma tamamlanamadı: $destination")
+      if (!dst.exists()) throw IllegalStateException("Move could not be completed: $destination")
       true
     }
 
     AsyncFunction("openFile") { path: String, mime: String ->
       ensureExternalAccessIfNeeded(path)
       val file = File(path)
-      if (!file.exists() || !file.isFile) throw IllegalStateException("Dosya bulunamadı: $path")
+      if (!file.exists() || !file.isFile) throw IllegalStateException("File not found: $path")
       val authority = "${context.packageName}.simplefilemanager.fileprovider"
       val uri = FileProvider.getUriForFile(context, authority, file)
       val resolvedMime = if (mime.isNotBlank() && mime != "*/*") mime else guessMime(file.name)
@@ -154,7 +154,7 @@ class SimpleFileManagerNativeModule : Module() {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       }
       if (intent.resolveActivity(context.packageManager) == null) {
-        throw IllegalStateException("Bu dosya türünü açabilecek bir uygulama bulunamadı.")
+        throw IllegalStateException("No application was found that can open this file type.")
       }
       context.startActivity(intent)
       true
@@ -210,7 +210,7 @@ class SimpleFileManagerNativeModule : Module() {
     @Suppress("DEPRECATION")
     val primaryPath = Environment.getExternalStorageDirectory().absolutePath
     roots[primaryPath] = mapOf(
-      "label" to "Dahili Depolama",
+      "label" to "Internal Storage",
       "path" to primaryPath,
       "removable" to false,
       "primary" to true
@@ -225,9 +225,9 @@ class SimpleFileManagerNativeModule : Module() {
         val removable = volume.isRemovable
         val primary = volume.isPrimary
         val label = when {
-          primary -> "Dahili Depolama"
-          removable -> "Harici Depolama"
-          else -> "Depolama"
+          primary -> "Internal Storage"
+          removable -> "External Storage"
+          else -> "Storage"
         }
         roots[path] = mapOf(
           "label" to label,
@@ -248,7 +248,7 @@ class SimpleFileManagerNativeModule : Module() {
         val directory = File(path)
         if (!directory.exists()) return@forEach
         roots[path] = mapOf(
-          "label" to "Harici Depolama",
+          "label" to "External Storage",
           "path" to path,
           "removable" to true,
           "primary" to false
@@ -265,7 +265,7 @@ class SimpleFileManagerNativeModule : Module() {
     val root = Environment.getExternalStorageDirectory().absolutePath
     val absolute = File(path).absolutePath
     if (absolute.startsWith(root) && !Environment.isExternalStorageManager()) {
-      throw SecurityException("Tüm dosyalara erişim izni kapalı.")
+      throw SecurityException("All files access permission is disabled.")
     }
   }
 
@@ -278,9 +278,9 @@ class SimpleFileManagerNativeModule : Module() {
   }
 
   private fun replaceSafely(source: File, destination: File, deleteSource: Boolean) {
-    val parent = destination.parentFile ?: throw IllegalStateException("Hedef klasör bulunamadı.")
+    val parent = destination.parentFile ?: throw IllegalStateException("Destination folder was not found.")
     if (!parent.exists() && !parent.mkdirs()) {
-      throw IllegalStateException("Hedef klasör hazırlanamadı.")
+      throw IllegalStateException("Destination folder could not be prepared.")
     }
 
     val token = UUID.randomUUID().toString()
@@ -291,7 +291,7 @@ class SimpleFileManagerNativeModule : Module() {
       copyRecursive(source, temp)
 
       if (destination.exists() && !destination.renameTo(backup)) {
-        throw IllegalStateException("Mevcut hedef güvenli biçimde yedeklenemedi.")
+        throw IllegalStateException("The existing destination could not be backed up safely.")
       }
 
       if (!temp.renameTo(destination)) {
@@ -325,15 +325,15 @@ class SimpleFileManagerNativeModule : Module() {
   private fun copyRecursive(source: File, destination: File) {
     if (source.isDirectory) {
       if (!destination.exists() && !destination.mkdirs()) {
-        throw IllegalStateException("Klasör oluşturulamadı: ${destination.absolutePath}")
+        throw IllegalStateException("Folder could not be created: ${destination.absolutePath}")
       }
-      val children = source.listFiles() ?: throw SecurityException("Klasör okunamadı: ${source.absolutePath}")
+      val children = source.listFiles() ?: throw SecurityException("Folder could not be read: ${source.absolutePath}")
       children.forEach { child ->
         copyRecursive(child, File(destination, child.name))
       }
     } else {
       destination.parentFile?.let { parent ->
-        if (!parent.exists() && !parent.mkdirs()) throw IllegalStateException("Hedef klasör oluşturulamadı.")
+        if (!parent.exists() && !parent.mkdirs()) throw IllegalStateException("Destination folder could not be created.")
       }
       FileInputStream(source).use { input ->
         FileOutputStream(destination).use { output ->
@@ -347,10 +347,10 @@ class SimpleFileManagerNativeModule : Module() {
 
   private fun deleteRecursive(file: File) {
     if (file.isDirectory) {
-      val children = file.listFiles() ?: throw SecurityException("Klasör okunamadı: ${file.absolutePath}")
+      val children = file.listFiles() ?: throw SecurityException("Folder could not be read: ${file.absolutePath}")
       children.forEach { deleteRecursive(it) }
     }
-    if (!file.delete()) throw IllegalStateException("Silinemedi: ${file.absolutePath}")
+    if (!file.delete()) throw IllegalStateException("Could not delete: ${file.absolutePath}")
   }
 
   private fun guessMime(name: String): String {
