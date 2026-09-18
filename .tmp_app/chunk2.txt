@@ -1,0 +1,208 @@
+       setSelected(null);
+        setEditorMode(null);
+        setEditorValue('');
+        return;
+      }
+
+      if (await NativeStorage.exists(destination)) throw new Error('Bu isimde bir dosya veya klasör zaten var.');
+
+      if (editorMode === 'rename' && selected) {
+        await NativeStorage.move(selected.path, destination, false);
+        setSelected(null);
+      } else if (editorMode === 'folder') {
+        await NativeStorage.mkdir(destination);
+      } else if (editorMode === 'file') {
+        await NativeStorage.createFile(destination);
+      }
+
+      setEditorMode(null);
+      setEditorValue('');
+      await refresh();
+    } catch (error) {
+      showFsError('İşlem başarısız', error, currentPath);
+    } finally {
+      operationLock.current = false;
+    }
+  };
+
+  const removeSelected = () => {
+    if (!selected) return;
+    const item = selected;
+    Alert.alert(
+      'Silinsin mi?',
+      item.isDirectory
+        ? `“${item.name}” klasörü ve içindekiler kalıcı olarak silinecek.`
+        : `“${item.name}” kalıcı olarak silinecek.`,
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        {
+          text: 'Sil',
+          style: 'destructive',
+          onPress: async () => {
+            if (operationLock.current) return;
+            operationLock.current = true;
+            try {
+              if (!storageReady) throw new Error('Dosya yazma yetkisi doğrulanamadı.');
+              await NativeStorage.delete(item.path);
+              setSelected(null);
+              await refresh();
+            } catch (error) {
+              showFsError('Silinemedi', error, item.path);
+            } finally {
+              operationLock.current = false;
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const setClipboardFromSelected = (mode: ClipboardMode) => {
+    if (!selected) return;
+    setClipboard({ mode, item: selected });
+    setSelected(null);
+  };
+
+  const paste = async (overwrite = false) => {
+    if (!clipboard || operationLock.current) return;
+    const source = clipboard.item;
+    const destination = joinPath(currentPath, source.name);
+    const sourceNormalized = normalizePath(source.path);
+    const destinationNormalized = normalizePath(destination);
+
+    if (source.isDirectory && `${normalizePath(currentPath)}/`.startsWith(`${sourceNormalized}/`)) {
+      Alert.alert('Geçersiz hedef', 'Bir klasör kendi içine veya alt klasörlerinden birine kopyalanamaz/taşınamaz.');
+      return;
+    }
+    if (destinationNormalized === sourceNormalized) {
+      Alert.alert('Aynı klasör', 'Kaynak ve hedef aynı.');
+      return;
+    }
+
+    operationLock.current = true;
+    try {
+      if (!storageReady) throw new Error('Dosya yazma yetkisi doğrulanamadı.');
+
+      const destinationExists = await NativeStorage.exists(destination);
+      if (destinationExists && !overwrite) {
+        operationLock.current = false;
+        Alert.alert(
+          'Aynı isimde öğe var',
+          `Hedef klasörde “${source.name}” zaten var. Mevcut öğenin üzerine yazılsın mı?`,
+          [
+            { text: 'Vazgeç', style: 'cancel' },
+            { text: 'Üzerine Yaz', style: 'destructive', onPress: () => void paste(true) },
+          ]
+        );
+        return;
+      }
+
+      if (clipboard.mode === 'copy') {
+        await NativeStorage.copy(source.path, destination, overwrite);
+        Alert.alert('Kopyalandı', `“${source.name}” bu klasöre kopyalandı.`);
+      } else {
+        await NativeStorage.move(source.path, destination, overwrite);
+        setClipboard(null);
+      }
+      await refresh();
+    } catch (error) {
+      showFsError('İşlem başarısız', error, currentPath);
+    } finally {
+      operationLock.current = false;
+    }
+  };
+
+  const sendFeedback = async (kind: 'Hata Bildirimi' | 'Özellik Talebi' | 'Düzenleme Talebi') => {
+    const subject = `[${APP_NAME}] ${kind}`;
+    const body = `${kind}\n\nAçıklama:\n\nCihaz / Android sürümü (varsa):\n`;
+    const url = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    try {
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('E-posta açılamadı', `İletişim: ${CONTACT_EMAIL}`);
+    }
+  };
+
+  if (booting) {
+    return (
+      <SafeAreaView style={styles.bootSafe} edges={['top', 'bottom', 'left', 'right']}>
+        <StatusBar style="light" />
+        <View style={styles.bootContent}>
+          <Image source={require('./assets/icon.png')} style={styles.bootLogo} resizeMode="contain" />
+          <Text style={styles.bootTitle}>{APP_NAME}</Text>
+          <ActivityIndicator size="large" color="#6d91ff" style={styles.bootSpinner} />
+          <Text style={styles.bootText}>Açılıyor…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
+
+      <View style={styles.brandBar}>
+        <Image source={require('./assets/icon.png')} style={styles.logoImage} resizeMode="contain" />
+        <View style={styles.brandTextWrap}>
+          <Text style={styles.brandTitle} numberOfLines={1}>{APP_NAME}</Text>
+          {!isLandscape && <Text style={styles.brandSubtitle} numberOfLines={1}>Dosya Yöneticisi</Text>}
+        </View>
+        <Pressable
+          accessibilityLabel="Görünümü küçült"
+          onPress={() => changeScale(-SCALE_STEP)}
+          disabled={uiScale <= MIN_SCALE}
+          style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed, uiScale <= MIN_SCALE && styles.disabled]}
+        >
+          <Text style={styles.scaleButtonText}>A−</Text>
+        </Pressable>
+        <Pressable
+          accessibilityLabel="Görünümü büyüt"
+          onPress={() => changeScale(SCALE_STEP)}
+          disabled={uiScale >= MAX_SCALE}
+          style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed, uiScale >= MAX_SCALE && styles.disabled]}
+        >
+          <Text style={styles.scaleButtonText}>A+</Text>
+        </Pressable>
+        <Pressable
+          accessibilityLabel={theme === 'dark' ? 'Açık temaya geç' : 'Karanlık temaya geç'}
+          onPress={toggleTheme}
+          style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed]}
+        >
+          <Text style={styles.brandButtonText}>{theme === 'dark' ? '☀' : '☾'}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityLabel="Hakkında"
+          onPress={() => setAboutVisible(true)}
+          style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed]}
+        >
+          <Text style={styles.brandButtonText}>ⓘ</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.navHeader}>
+        <Pressable
+          accessibilityLabel="Üst klasöre çık"
+          onPress={goUp}
+          disabled={stack.length === 1}
+          style={[styles.headerButton, stack.length === 1 && styles.disabled]}
+        >
+          <Text style={styles.headerButtonText}>‹</Text>
+        </Pressable>
+        <Pressable
+          style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.headerTitlePressed]}
+          onPress={() => { void loadStorageRoots(); setStoragePickerVisible(true); }}
+          accessibilityLabel="Depolama birimini değiştir"
+        >
+          <Text style={styles.headerTitle} numberOfLines={1}>{title} <Text style={styles.storageChevron}>⌄</Text></Text>
+          <Text style={styles.headerPath} numberOfLines={1} ellipsizeMode="middle">{currentPath}</Text>
+        </Pressable>
+        <View style={[styles.accessDot, { backgroundColor: storageReady ? colors.success : colors.danger }]} />
+        <Pressable onPress={() => void refresh()} style={styles.smallHeaderButton} accessibilityLabel="Yenile">
+          <Text style={styles.smallHeaderButtonText}>↻</Text>
+        </Pressable>
+      </View>
+
+      {clipboard && (
+        <View style={styles.clipboardBar}>
+          <View style={styles.clipboardTextWrap}>
+            <Text style={style
