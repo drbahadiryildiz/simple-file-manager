@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.storage.StorageManager
 import android.provider.Settings
 import android.webkit.MimeTypeMap
 import androidx.core.content.ContextCompat
@@ -35,6 +36,10 @@ class SimpleFileManagerNativeModule : Module() {
     Function("openAllFilesAccessSettings") {
       openAllFilesAccessSettings()
       true
+    }
+
+    AsyncFunction("getStorageRoots") {
+      getStorageRoots()
     }
 
     AsyncFunction("list") { path: String ->
@@ -181,6 +186,60 @@ class SimpleFileManagerNativeModule : Module() {
     } catch (_: Exception) {
       context.startActivity(fallback)
     }
+  }
+
+  private fun getStorageRoots(): List<Map<String, Any>> {
+    val roots = linkedMapOf<String, Map<String, Any>>()
+    @Suppress("DEPRECATION")
+    val primaryPath = Environment.getExternalStorageDirectory().absolutePath
+    roots[primaryPath] = mapOf(
+      "label" to "Dahili Depolama",
+      "path" to primaryPath,
+      "removable" to false,
+      "primary" to true
+    )
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      val manager = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
+      manager.storageVolumes.forEach { volume ->
+        val directory = volume.directory ?: return@forEach
+        val path = directory.absolutePath
+        if (!directory.exists() || roots.containsKey(path)) return@forEach
+        val removable = volume.isRemovable
+        val primary = volume.isPrimary
+        val label = when {
+          primary -> "Dahili Depolama"
+          removable -> "Harici Depolama"
+          else -> "Depolama"
+        }
+        roots[path] = mapOf(
+          "label" to label,
+          "path" to path,
+          "removable" to removable,
+          "primary" to primary
+        )
+      }
+    } else {
+      context.getExternalFilesDirs(null).forEach { appDir ->
+        if (appDir == null) return@forEach
+        val marker = "/Android/data/${context.packageName}/files"
+        val absolute = appDir.absolutePath
+        val index = absolute.indexOf(marker)
+        if (index <= 0) return@forEach
+        val path = absolute.substring(0, index)
+        if (roots.containsKey(path)) return@forEach
+        val directory = File(path)
+        if (!directory.exists()) return@forEach
+        roots[path] = mapOf(
+          "label" to "Harici Depolama",
+          "path" to path,
+          "removable" to true,
+          "primary" to false
+        )
+      }
+    }
+
+    return roots.values.toList()
   }
 
   private fun ensureExternalAccessIfNeeded(path: String) {
