@@ -152,7 +152,7 @@ function normalizePath(path: string) {
 
 function baseName(path: string) {
   const clean = normalizePath(path);
-  return clean.split('/').pop() || 'Dahili Depolama';
+  return clean.split('/').pop() || 'Storage';
 }
 
 function formatSize(bytes?: number | null) {
@@ -296,7 +296,7 @@ function AppContent() {
   const [language, setLanguage] = useState<Language>('en');
   const [booting, setBooting] = useState(true);
   const [storageReady, setStorageReady] = useState(false);
-  const [storageRoots, setStorageRoots] = useState<StorageRoot[]>([{ label: 'Dahili Depolama', path: ROOT_PATH, removable: false, primary: true }]);
+  const [storageRoots, setStorageRoots] = useState<StorageRoot[]>([{ label: '', path: ROOT_PATH, removable: false, primary: true }]);
   const [storagePickerVisible, setStoragePickerVisible] = useState(false);
   const [sortPickerVisible, setSortPickerVisible] = useState(false);
   const [languagePickerVisible, setLanguagePickerVisible] = useState(false);
