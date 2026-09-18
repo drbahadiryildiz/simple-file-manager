@@ -1,0 +1,153 @@
+s.clipboardTitle} numberOfLines={1}>
+              {clipboard.mode === 'copy' ? 'Kopyalanacak' : 'Taşınacak'}: {clipboard.item.name}
+            </Text>
+            <Text style={styles.clipboardHint}>Hedef klasöre gidip Yapıştır'a bas.</Text>
+          </View>
+          <Pressable onPress={() => void paste()} style={styles.pasteButton}>
+            <Text style={styles.pasteButtonText}>Yapıştır</Text>
+          </Pressable>
+          <Pressable onPress={() => setClipboard(null)} style={styles.cancelClipboardButton}>
+            <Text style={styles.cancelClipboardText}>×</Text>
+          </Pressable>
+        </View>
+      )}
+
+      <View style={styles.content}>
+        {loading ? (
+          <View style={styles.center}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={styles.muted}>Dosyalar okunuyor…</Text>
+          </View>
+        ) : accessError ? (
+          <View style={styles.center}>
+            <Text style={styles.lockIcon}>{accessIssueKind === 'protected' ? '🛡️' : '🔒'}</Text>
+            <Text style={styles.accessTitle}>
+              {accessIssueKind === 'protected' ? 'Android tarafından korunan klasör' : accessIssueKind === 'permission' ? 'Dosya erişimi gerekli' : 'Klasör açılamadı'}
+            </Text>
+            <Text style={styles.accessText}>
+              {accessIssueKind === 'protected'
+                ? 'Android/data ve Android/obb içindeki diğer uygulama verileri Android tarafından ayrıca korunur.'
+                : accessIssueKind === 'permission'
+                  ? 'Normal “Uygulama izinleri” ekranı yeterli değildir. Android’in özel “Tüm dosyalara erişim” ekranında Simple File Manager anahtarını açın.'
+                  : 'Bu klasör cihaz veya sistem tarafından kısıtlanıyor olabilir.'}
+            </Text>
+            {accessIssueKind === 'permission' && (
+              <Pressable style={styles.primaryButton} onPress={() => void requestStorageAccess()}>
+                <Text style={styles.primaryButtonText}>Özel Dosya Erişimi İznini Aç</Text>
+              </Pressable>
+            )}
+            {stack.length > 1 && (
+              <Pressable style={styles.secondaryButton} onPress={goUp}>
+                <Text style={styles.secondaryButtonText}>Üst Klasöre Dön</Text>
+              </Pressable>
+            )}
+            <Pressable style={styles.secondaryButton} onPress={() => void refresh()}>
+              <Text style={styles.secondaryButtonText}>Tekrar Dene</Text>
+            </Pressable>
+            <Text style={styles.errorDetail} numberOfLines={4}>{accessError}</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={items}
+            keyExtractor={item => item.path}
+            contentContainerStyle={items.length === 0 ? styles.emptyList : styles.listContent}
+            ListEmptyComponent={
+              <View style={styles.center}>
+                <Text style={styles.muted}>Bu klasör boş.</Text>
+              </View>
+            }
+            renderItem={({ item }) => (
+              <Pressable
+                style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+                onPress={() => item.isDirectory ? enterDirectory(item) : void openFile(item)}
+                onLongPress={() => setSelected(item)}
+              >
+                <Text style={styles.icon}>{item.isDirectory ? '📁' : '📄'}</Text>
+                <View style={styles.rowText}>
+                  <Text style={styles.fileName} numberOfLines={1} ellipsizeMode="middle">{item.name}</Text>
+                  <Text style={styles.metaText}>{item.isDirectory ? 'Klasör' : formatSize(item.size)}</Text>
+                </View>
+                <Pressable hitSlop={10} onPress={() => setSelected(item)} style={styles.moreButton}>
+                  <Text style={styles.moreText}>⋮</Text>
+                </Pressable>
+              </Pressable>
+            )}
+          />
+        )}
+      </View>
+
+      {!accessError && !loading && (
+        <View style={styles.bottomBar}>
+          <Pressable style={({ pressed }) => [styles.bottomAction, pressed && styles.bottomActionPressed]} onPress={() => startCreate('folder')}>
+            <View style={styles.addIconWrap}>
+              <Text style={styles.bottomActionIcon}>📁</Text>
+              <View style={styles.addIconBadge}><Text style={styles.addIconPlus}>+</Text></View>
+            </View>
+            <Text style={styles.bottomActionText}>Klasör oluştur</Text>
+          </Pressable>
+          <Pressable style={({ pressed }) => [styles.bottomAction, pressed && styles.bottomActionPressed]} onPress={() => startCreate('file')}>
+            <View style={styles.addIconWrap}>
+              <Text style={styles.bottomActionIcon}>📄</Text>
+              <View style={styles.addIconBadge}><Text style={styles.addIconPlus}>+</Text></View>
+            </View>
+            <Text style={styles.bottomActionText}>Dosya oluştur</Text>
+          </Pressable>
+        </View>
+      )}
+
+      <Modal visible={storagePickerVisible} transparent animationType="fade" onRequestClose={() => setStoragePickerVisible(false)}>
+        <Pressable style={styles.overlay} onPress={() => setStoragePickerVisible(false)}>
+          <Pressable style={styles.storageSheet} onPress={() => {}}>
+            <Text style={styles.sheetTitle}>Depolama</Text>
+            {storageRoots.map(root => {
+              const active = currentStorage && normalizePath(root.path) === normalizePath(currentStorage.path);
+              return (
+                <Pressable
+                  key={root.path}
+                  style={({ pressed }) => [styles.storageRow, pressed && styles.rowPressed]}
+                  onPress={() => switchStorage(root)}
+                >
+                  <Text style={styles.storageIcon}>{root.removable ? '💾' : '📱'}</Text>
+                  <View style={styles.storageTextWrap}>
+                    <Text style={styles.storageName} numberOfLines={1}>{root.label}</Text>
+                    <Text style={styles.storageType} numberOfLines={1}>
+                      {root.primary ? 'Telefonun ortak depolama alanı' : root.removable ? 'SD kart veya USB depolama' : 'Ek depolama alanı'}
+                    </Text>
+                    <Text style={styles.storagePath} numberOfLines={1} ellipsizeMode="middle">{root.path}</Text>
+                  </View>
+                  {active && <Text style={styles.storageActive}>✓</Text>}
+                </Pressable>
+              );
+            })}
+            <Pressable style={styles.sheetCancel} onPress={() => setStoragePickerVisible(false)}>
+              <Text style={styles.sheetCancelText}>Kapat</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={!!selected} transparent animationType="fade" onRequestClose={() => setSelected(null)}>
+        <Pressable style={styles.overlay} onPress={() => setSelected(null)}>
+          <Pressable style={styles.sheet} onPress={() => {}}>
+            <Text style={styles.sheetTitle} numberOfLines={2}>{selected?.name}</Text>
+            {selected && !selected.isDirectory && (
+              <Pressable
+                style={styles.sheetAction}
+                onPress={() => {
+                  const item = selected;
+                  setSelected(null);
+                  void openFile(item);
+                }}
+              >
+                <Text style={styles.sheetActionText}>Aç</Text>
+              </Pressable>
+            )}
+            <Pressable style={styles.sheetAction} onPress={() => setClipboardFromSelected('copy')}>
+              <Text style={styles.sheetActionText}>Kopyala</Text>
+            </Pressable>
+            <Pressable style={styles.sheetAction} onPress={() => setClipboardFromSelected('move')}>
+              <Text style={styles.sheetActionText}>Taşı</Text>
+            </Pressable>
+            <Pressable style={styles.sheetAction} onPress={startRename}>
+              <Text style={styles.sheetActionText}>Yeniden adlandır</Text>
+            </Pressable>
