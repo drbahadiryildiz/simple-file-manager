@@ -1,37 +1,90 @@
-# Simple File Manager v1.3
+# Simple File Manager
 
-Android / Expo tabanlı kişisel dosya yöneticisi.
+![Simple File Manager](assets/icon.png)
 
-## v1.3'te ana düzeltme
+Android için sade, çevrimdışı ve yerel çalışan bir dosya yöneticisi.
 
-Önceki sürümde React Native dosya sistemi katmanı Android'in geniş depolama izni açık olsa bile mevcut klasörlerin içeriğini okumada tutarsız davranabiliyordu.
+**Güncel sürüm:** `1.3.4`  
+**Android versionCode:** `9`
 
-Bu sürümde dosya sistemi işlemleri yerel Expo Android modülü üzerinden doğrudan `java.io.File` ile yapılır. Android 11+ için erişim durumu `Environment.isExternalStorageManager()` ile kontrol edilir ve gerektiğinde uygulamanın özel "Tüm dosyalara erişim" ayarı açılır.
+## Özellikler
 
-Desteklenen işlemler:
-- Dahili ortak depolamayı listeleme
-- Klasörlere girme / geri çıkma
+- Dahili depolama ve çıkarılabilir depolama birimlerini listeleme
+- SD kart / desteklenen USB depolama birimlerini `Harici Depolama` olarak gösterme
 - Dosya ve klasör oluşturma
 - Yeniden adlandırma
-- Kopyalama / taşıma / yapıştırma
+- Kopyalama ve taşıma
 - Silme
-- Dosyayı uygun Android uygulamasıyla açma
+- Uygun Android uygulamasıyla dosya açma
 - Açık / koyu tema
-- A− / A+ görünüm ölçeği
-- Safe-area uyumlu üst ve alt alan
-- Uygulama ikonu ve splash ekranı
-- Hakkında ve geri bildirim e-postası
+- Dosya ve klasör görünüm boyutunu büyütme / küçültme
+- Dikey ve yatay ekran desteği
+- Android safe-area / çentik / navigasyon alanı uyumu
+- Özel uygulama ikonu ve splash ekranı
+- Türkçe arayüz
 
-> Android'in sistem koruması nedeniyle `/Android/data` ve `/Android/obb` gibi bazı alanlar tüm dosyalara erişim verilse dahi kısıtlı olabilir.
+## Depolama modeli
 
-## Build
+Uygulama, Android 11 ve üzerindeki cihazlarda dosya yöneticisi işlevleri için `MANAGE_EXTERNAL_STORAGE` ("Tüm dosyalara erişim") iznini kullanır. Uygulama ilk kullanımda gerekli sistem ayarına yönlendirir.
 
-Bu klasör doğrudan mevcut GitHub / EAS proje kökünün üzerine kopyalanmak üzere hazırlanmıştır.
+Android'in platform düzeyinde koruduğu bazı alanlar (özellikle başka uygulamalara ait `Android/data` ve `Android/obb` alt dizinleri) cihaz ve Android sürümüne bağlı olarak erişime kapalı kalabilir.
 
-Native modül eklendiği için bu sürümde bir kez `npm install` çalıştırın. Sonra normal Git push ve EAS preview build yeterlidir.
+Harici depolama cihazları Android tarafından bir `StorageVolume` olarak sunuluyorsa uygulamada görünür. Bazı USB OTG cihazlarında üreticiye bağlı olarak Storage Access Framework gerekebilir.
 
+## Kurulum
 
-## v1.3.1
-- Emülatörde yeniden adlandırma sonrası görülen yanlış hata mesajı giderildi.
-- Taşıma/rename işlemleri çift tetiklemeye karşı kilitlendi ve native tarafta idempotent hale getirildi.
-- Alt çubuktaki klasör/dosya oluşturma artısı ikonun üzerine alındı.
+En kolay yöntem, GitHub **Releases** bölümündeki son `.apk` dosyasını indirip Android cihazına kurmaktır.
+
+Kaynak koddan APK üretmek için:
+
+```bash
+npm install
+npx eas-cli@latest build -p android --profile release
+```
+
+> `npm install` yalnızca ilk kurulumda veya bağımlılıklar değiştiğinde gereklidir.
+
+Google Play / AAB üretmek için:
+
+```bash
+npx eas-cli@latest build -p android --profile production
+```
+
+## Geliştirme
+
+```bash
+npm install
+npx expo start
+```
+
+Proje Expo / React Native kullanır. Android dosya işlemleri `modules/simple-file-manager-native` altındaki yerel Expo modülü üzerinden gerçekleştirilir.
+
+## Sürüm geçmişi
+
+Ayrıntılar için [CHANGELOG.md](CHANGELOG.md) dosyasına bakın.
+
+## Gizlilik
+
+Uygulamanın amacı cihazdaki dosyaları yerel olarak yönetmektir. Projenin kendi uygulama mantığında reklam, kullanıcı hesabı, analitik veya buluta dosya yükleme özelliği bulunmaz. Ayrıntılar için [PRIVACY.md](PRIVACY.md) dosyasına bakın.
+
+## Hata / özellik talebi
+
+GitHub Issues üzerinden hata bildirimi veya özellik talebi açabilirsiniz.
+
+E-posta: **bahadir@bahadiryildiz.net**
+
+## Güvenlik
+
+Güvenlik açığı bildirimleri için [SECURITY.md](SECURITY.md) dosyasını kullanın.
+
+## Lisans
+
+Bu depo herkese açık olmakla birlikte şu anda açık kaynak lisansı tanımlanmamıştır. Depoyu herkese açık yapmak tek başına kaynak kodun yeniden kullanım, değiştirme veya dağıtım hakkını vermez.
+
+---
+
+## English
+
+Simple File Manager is a lightweight Android file manager focused on local file operations. It supports internal storage, removable storage when exposed by Android, create/rename/copy/move/delete operations, light/dark themes, landscape mode, and a native Android storage module.
+
+For bug reports and feature requests, use GitHub Issues or contact **bahadir@bahadiryildiz.net**.

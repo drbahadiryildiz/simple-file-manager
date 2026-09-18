@@ -13,10 +13,12 @@ import {
   PermissionsAndroid,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   useColorScheme,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import {
@@ -29,6 +31,13 @@ import {
 type ThemeMode = 'light' | 'dark';
 type ClipboardMode = 'copy' | 'move';
 type AccessIssueKind = 'permission' | 'protected' | 'folder' | null;
+
+type StorageRoot = {
+  label: string;
+  path: string;
+  removable: boolean;
+  primary: boolean;
+};
 
 type FileEntry = {
   name: string;
@@ -66,7 +75,7 @@ type Palette = {
 
 const PACKAGE_NAME = 'com.local.simplefilemanager';
 const APP_NAME = 'Simple File Manager';
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.3.4';
 const CONTACT_EMAIL = 'bahadir@bahadiryildiz.net';
 const ROOT_PATH = Platform.OS === 'android' ? NativeStorage.getRootPath() : '';
 const MIN_SCALE = 0.8;
@@ -161,10 +170,8 @@ function mimeTypeForName(name: string) {
 }
 
 function isProtectedAndroidPath(path: string) {
-  const value = normalizePath(path).toLowerCase();
-  const root = normalizePath(ROOT_PATH).toLowerCase();
-  return value === `${root}/android/data` || value.startsWith(`${root}/android/data/`) ||
-    value === `${root}/android/obb` || value.startsWith(`${root}/android/obb/`);
+  const value = `/${normalizePath(path).toLowerCase().replace(/^\/+/, '')}/`;
+  return value.includes('/android/data/') || value.includes('/android/obb/');
 }
 
 function looksLikePermissionError(error: unknown) {
@@ -219,12 +226,16 @@ async function readDirectory(path: string): Promise<FileEntry[]> {
 function AppContent() {
   const systemScheme = useColorScheme();
   const insets = useSafeAreaInsets();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const isLandscape = windowWidth > windowHeight;
   const initialTheme: ThemeMode = systemScheme === 'dark' ? 'dark' : 'light';
 
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [uiScale, setUiScale] = useState(1);
   const [booting, setBooting] = useState(true);
   const [storageReady, setStorageReady] = useState(false);
+  const [storageRoots, setStorageRoots] = useState<StorageRoot[]>([{ label: 'Dahili Depolama', path: ROOT_PATH, removable: false, primary: true }]);
+  const [storagePickerVisible, setStoragePickerVisible] = useState(false);
   const [stack, setStack] = useState<string[]>([ROOT_PATH]);
   const [items, setItems] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -240,8 +251,9 @@ function AppContent() {
 
   const currentPath = stack[stack.length - 1];
   const colors = theme === 'dark' ? DARK : LIGHT;
-  const styles = useMemo(() => createStyles(colors, uiScale, insets.bottom), [colors, uiScale, insets.bottom]);
-  const title = stack.length === 1 ? 'Dahili Depolama' : baseName(currentPath);
+  const styles = useMemo(() => createStyles(colors, uiScale, insets.bottom, isLandscape), [colors, uiScale, insets.bottom, isLandscape]);
+  const currentStorage = storageRoots.find(root => normalizePath(currentPath).startsWith(normalizePath(root.path))) ?? storageRoots[0];
+  const title = stack.length === 1 ? (currentStorage?.label || 'Depolama') : baseName(currentPath);
 
   const persistSettings = useCallback((nextTheme: ThemeMode, nextScale: number) => {
     void saveSettings({ theme: nextTheme, scale: nextScale });
@@ -259,6 +271,24 @@ function AppContent() {
     persistSettings(theme, next);
   };
 
+  const loadStorageRoots = useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+    try {
+      const roots = await NativeStorage.getStorageRoots();
+      const normalized = roots
+        .filter(root => !!root.path)
+        .map(root => ({
+          label: root.primary ? 'Dahili Depolama' : root.removable ? 'Harici Depolama' : (root.label || 'Depolama'),
+          path: normalizePath(root.path),
+          removable: !!root.removable,
+          primary: !!root.primary,
+        }));
+      if (normalized.length > 0) setStorageRoots(normalized);
+    } catch {
+      // Dahili depolama geri dönüşü zaten mevcut.
+    }
+  }, []);
+
   const refreshPath = useCallback(async (path: string) => {
     setLoading(true);
     try {
@@ -266,14 +296,12 @@ function AppContent() {
       setItems(listed);
       setAccessError(null);
       setAccessIssueKind(null);
-      if (normalizePath(path) === normalizePath(ROOT_PATH)) {
-        const usable = await verifyStorageAccess();
-        setStorageReady(usable);
-        if (!usable) {
-          setItems([]);
-          setAccessIssueKind('permission');
-          setAccessError('Depolama okunabiliyor olabilir ancak dosya yazma yetkisi yok. “Tüm dosyalara erişim” özel iznini açın.');
-        }
+      const usable = await verifyStorageAccess();
+      setStorageReady(usable);
+      if (!usable) {
+        setItems([]);
+        setAccessIssueKind('permission');
+        setAccessError('Depolama okunabiliyor olabilir ancak dosya yazma yetkisi yok. “Tüm dosyalara erişim” özel iznini açın.');
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error ?? 'Depolamaya erişilemiyor.');
@@ -351,11 +379,12 @@ function AppContent() {
       if (!mounted) return;
       setTheme(settings.theme);
       setUiScale(settings.scale);
+      await loadStorageRoots();
       await refreshPath(ROOT_PATH);
       if (mounted) setBooting(false);
     })();
     return () => { mounted = false; };
-  }, [initialTheme, refreshPath]);
+  }, [initialTheme, loadStorageRoots, refreshPath]);
 
   useEffect(() => {
     if (booting || storageReady || permissionAlertShown.current || Platform.OS !== 'android') return;
@@ -376,11 +405,12 @@ function AppContent() {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', state => {
       if (state === 'active' && !booting) {
+        void loadStorageRoots();
         void refreshPath(currentPath);
       }
     });
     return () => subscription.remove();
-  }, [booting, currentPath, refreshPath]);
+  }, [booting, currentPath, loadStorageRoots, refreshPath]);
 
   useEffect(() => {
     if (!booting) void refreshPath(currentPath);
@@ -388,16 +418,20 @@ function AppContent() {
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (storagePickerVisible) {
+        setStoragePickerVisible(false);
+        return true;
+      }
       if (aboutVisible) {
         setAboutVisible(false);
         return true;
       }
-      if (selected) {
-        setSelected(null);
-        return true;
-      }
       if (editorMode) {
         setEditorMode(null);
+        return true;
+      }
+      if (selected) {
+        setSelected(null);
         return true;
       }
       if (stack.length > 1) {
@@ -407,7 +441,15 @@ function AppContent() {
       return false;
     });
     return () => sub.remove();
-  }, [aboutVisible, editorMode, selected, stack.length]);
+  }, [aboutVisible, editorMode, selected, stack.length, storagePickerVisible]);
+
+  const switchStorage = (root: StorageRoot) => {
+    setStoragePickerVisible(false);
+    setSelected(null);
+    setAccessError(null);
+    setAccessIssueKind(null);
+    setStack([root.path]);
+  };
 
   const enterDirectory = (item: FileEntry) => {
     setSelected(null);
@@ -453,10 +495,18 @@ function AppContent() {
     try {
       if (!storageReady) throw new Error('Dosya yazma yetkisi doğrulanamadı.');
       const destination = joinPath(currentPath, name);
+
+      if (editorMode === 'rename' && selected && normalizePath(selected.path) === normalizePath(destination)) {
+        setSelected(null);
+        setEditorMode(null);
+        setEditorValue('');
+        return;
+      }
+
       if (await NativeStorage.exists(destination)) throw new Error('Bu isimde bir dosya veya klasör zaten var.');
 
       if (editorMode === 'rename' && selected) {
-        await NativeStorage.move(selected.path, destination);
+        await NativeStorage.move(selected.path, destination, false);
         setSelected(null);
       } else if (editorMode === 'folder') {
         await NativeStorage.mkdir(destination);
@@ -512,7 +562,7 @@ function AppContent() {
     setSelected(null);
   };
 
-  const paste = async () => {
+  const paste = async (overwrite = false) => {
     if (!clipboard || operationLock.current) return;
     const source = clipboard.item;
     const destination = joinPath(currentPath, source.name);
@@ -531,13 +581,26 @@ function AppContent() {
     operationLock.current = true;
     try {
       if (!storageReady) throw new Error('Dosya yazma yetkisi doğrulanamadı.');
-      if (await NativeStorage.exists(destination)) throw new Error(`Hedefte “${source.name}” isminde bir öğe zaten var.`);
+
+      const destinationExists = await NativeStorage.exists(destination);
+      if (destinationExists && !overwrite) {
+        operationLock.current = false;
+        Alert.alert(
+          'Aynı isimde öğe var',
+          `Hedef klasörde “${source.name}” zaten var. Mevcut öğenin üzerine yazılsın mı?`,
+          [
+            { text: 'Vazgeç', style: 'cancel' },
+            { text: 'Üzerine Yaz', style: 'destructive', onPress: () => void paste(true) },
+          ]
+        );
+        return;
+      }
 
       if (clipboard.mode === 'copy') {
-        await NativeStorage.copy(source.path, destination);
+        await NativeStorage.copy(source.path, destination, overwrite);
         Alert.alert('Kopyalandı', `“${source.name}” bu klasöre kopyalandı.`);
       } else {
-        await NativeStorage.move(source.path, destination);
+        await NativeStorage.move(source.path, destination, overwrite);
         setClipboard(null);
       }
       await refresh();
@@ -581,7 +644,7 @@ function AppContent() {
         <Image source={require('./assets/icon.png')} style={styles.logoImage} resizeMode="contain" />
         <View style={styles.brandTextWrap}>
           <Text style={styles.brandTitle} numberOfLines={1}>{APP_NAME}</Text>
-          <Text style={styles.brandSubtitle} numberOfLines={1}>Dosya Yöneticisi</Text>
+          {!isLandscape && <Text style={styles.brandSubtitle} numberOfLines={1}>Dosya Yöneticisi</Text>}
         </View>
         <Pressable
           accessibilityLabel="Görünümü küçült"
@@ -624,10 +687,14 @@ function AppContent() {
         >
           <Text style={styles.headerButtonText}>‹</Text>
         </Pressable>
-        <View style={styles.headerTitleWrap}>
-          <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
-          <Text style={styles.headerPath} numberOfLines={1}>{currentPath}</Text>
-        </View>
+        <Pressable
+          style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.headerTitlePressed]}
+          onPress={() => { void loadStorageRoots(); setStoragePickerVisible(true); }}
+          accessibilityLabel="Depolama birimini değiştir"
+        >
+          <Text style={styles.headerTitle} numberOfLines={1}>{title} <Text style={styles.storageChevron}>⌄</Text></Text>
+          <Text style={styles.headerPath} numberOfLines={1} ellipsizeMode="middle">{currentPath}</Text>
+        </Pressable>
         <View style={[styles.accessDot, { backgroundColor: storageReady ? colors.success : colors.danger }]} />
         <Pressable onPress={() => void refresh()} style={styles.smallHeaderButton} accessibilityLabel="Yenile">
           <Text style={styles.smallHeaderButtonText}>↻</Text>
@@ -703,7 +770,7 @@ function AppContent() {
               >
                 <Text style={styles.icon}>{item.isDirectory ? '📁' : '📄'}</Text>
                 <View style={styles.rowText}>
-                  <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
+                  <Text style={styles.fileName} numberOfLines={1} ellipsizeMode="middle">{item.name}</Text>
                   <Text style={styles.metaText}>{item.isDirectory ? 'Klasör' : formatSize(item.size)}</Text>
                 </View>
                 <Pressable hitSlop={10} onPress={() => setSelected(item)} style={styles.moreButton}>
@@ -733,6 +800,37 @@ function AppContent() {
           </Pressable>
         </View>
       )}
+
+      <Modal visible={storagePickerVisible} transparent animationType="fade" onRequestClose={() => setStoragePickerVisible(false)}>
+        <Pressable style={styles.overlay} onPress={() => setStoragePickerVisible(false)}>
+          <Pressable style={styles.storageSheet} onPress={() => {}}>
+            <Text style={styles.sheetTitle}>Depolama</Text>
+            {storageRoots.map(root => {
+              const active = currentStorage && normalizePath(root.path) === normalizePath(currentStorage.path);
+              return (
+                <Pressable
+                  key={root.path}
+                  style={({ pressed }) => [styles.storageRow, pressed && styles.rowPressed]}
+                  onPress={() => switchStorage(root)}
+                >
+                  <Text style={styles.storageIcon}>{root.removable ? '💾' : '📱'}</Text>
+                  <View style={styles.storageTextWrap}>
+                    <Text style={styles.storageName} numberOfLines={1}>{root.label}</Text>
+                    <Text style={styles.storageType} numberOfLines={1}>
+                      {root.primary ? 'Telefonun ortak depolama alanı' : root.removable ? 'SD kart veya USB depolama' : 'Ek depolama alanı'}
+                    </Text>
+                    <Text style={styles.storagePath} numberOfLines={1} ellipsizeMode="middle">{root.path}</Text>
+                  </View>
+                  {active && <Text style={styles.storageActive}>✓</Text>}
+                </Pressable>
+              );
+            })}
+            <Pressable style={styles.sheetCancel} onPress={() => setStoragePickerVisible(false)}>
+              <Text style={styles.sheetCancelText}>Kapat</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal visible={!!selected} transparent animationType="fade" onRequestClose={() => setSelected(null)}>
         <Pressable style={styles.overlay} onPress={() => setSelected(null)}>
@@ -799,6 +897,7 @@ function AppContent() {
       <Modal visible={aboutVisible} transparent animationType="fade" onRequestClose={() => setAboutVisible(false)}>
         <Pressable style={styles.overlay} onPress={() => setAboutVisible(false)}>
           <Pressable style={styles.aboutSheet} onPress={() => {}}>
+            <ScrollView contentContainerStyle={styles.aboutScrollContent} showsVerticalScrollIndicator={false}>
             <View style={styles.aboutBrandRow}>
               <Image source={require('./assets/icon.png')} style={styles.aboutLogo} resizeMode="contain" />
               <View style={styles.aboutBrandText}>
@@ -831,6 +930,7 @@ function AppContent() {
             <Pressable style={styles.sheetCancel} onPress={() => setAboutVisible(false)}>
               <Text style={styles.sheetCancelText}>Kapat</Text>
             </Pressable>
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -846,22 +946,22 @@ export default function App() {
   );
 }
 
-function createStyles(colors: Palette, scale: number, bottomInset: number) {
+function createStyles(colors: Palette, scale: number, bottomInset: number, isLandscape: boolean) {
   const font = (value: number) => Math.round(value * scale * 10) / 10;
   const rowHeight = Math.max(58, Math.round(66 * scale));
   const iconSize = font(27);
 
   return StyleSheet.create({
     bootSafe: { flex: 1, backgroundColor: '#0F172A' },
-    bootContent: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 30 },
-    bootLogo: { width: 136, height: 136, borderRadius: 30 },
-    bootTitle: { marginTop: 22, color: '#ffffff', fontSize: 24, fontWeight: '900' },
-    bootSpinner: { marginTop: 28 },
-    bootText: { marginTop: 13, color: '#cbd5e1', fontSize: 15, fontWeight: '600' },
+    bootContent: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: isLandscape ? 18 : 30 },
+    bootLogo: { width: isLandscape ? 86 : 136, height: isLandscape ? 86 : 136, borderRadius: isLandscape ? 20 : 30 },
+    bootTitle: { marginTop: isLandscape ? 12 : 22, color: '#ffffff', fontSize: isLandscape ? 20 : 24, fontWeight: '900' },
+    bootSpinner: { marginTop: isLandscape ? 14 : 28 },
+    bootText: { marginTop: isLandscape ? 7 : 13, color: '#cbd5e1', fontSize: 15, fontWeight: '600' },
     safeArea: { flex: 1, backgroundColor: colors.surface },
     content: { flex: 1, backgroundColor: colors.background },
     brandBar: {
-      minHeight: 60,
+      minHeight: isLandscape ? 48 : 60,
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: 9,
@@ -870,7 +970,7 @@ function createStyles(colors: Palette, scale: number, bottomInset: number) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.border,
     },
-    logoImage: { width: 40, height: 40, borderRadius: 10, marginRight: 5 },
+    logoImage: { width: isLandscape ? 34 : 40, height: isLandscape ? 34 : 40, borderRadius: 10, marginRight: 5 },
     brandTextWrap: { flex: 1, minWidth: 0 },
     brandTitle: { color: colors.text, fontSize: 15.5, fontWeight: '800' },
     brandSubtitle: { marginTop: 1, color: colors.textMuted, fontSize: 10.5, fontWeight: '600' },
@@ -880,7 +980,7 @@ function createStyles(colors: Palette, scale: number, bottomInset: number) {
     scaleButtonText: { color: colors.text, fontSize: 13, fontWeight: '800' },
     disabled: { opacity: 0.28 },
     navHeader: {
-      minHeight: 62,
+      minHeight: isLandscape ? 50 : 62,
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: 8,
@@ -888,12 +988,14 @@ function createStyles(colors: Palette, scale: number, bottomInset: number) {
       borderBottomColor: colors.border,
       backgroundColor: colors.surface,
     },
-    headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    headerButton: { width: 44, height: isLandscape ? 40 : 44, alignItems: 'center', justifyContent: 'center' },
     headerButtonText: { fontSize: 38, lineHeight: 40, color: colors.text },
-    smallHeaderButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    smallHeaderButton: { width: 44, height: isLandscape ? 40 : 44, alignItems: 'center', justifyContent: 'center' },
     smallHeaderButtonText: { fontSize: 26, color: colors.text },
-    headerTitleWrap: { flex: 1, minWidth: 0 },
+    headerTitleWrap: { flex: 1, minWidth: 0, paddingVertical: 4, borderRadius: 8 },
+    headerTitlePressed: { backgroundColor: colors.pressed },
     headerTitle: { fontSize: font(17), fontWeight: '700', color: colors.text },
+    storageChevron: { color: colors.textMuted, fontSize: font(13), fontWeight: '900' },
     headerPath: { marginTop: 2, fontSize: font(10.5), color: colors.textMuted },
     accessDot: { width: 9, height: 9, borderRadius: 5, marginHorizontal: 4 },
     clipboardBar: {
@@ -931,9 +1033,9 @@ function createStyles(colors: Palette, scale: number, bottomInset: number) {
     secondaryButtonText: { color: colors.primary, fontWeight: '700', fontSize: font(14) },
     errorDetail: { marginTop: 12, color: colors.textMuted, fontSize: 10, textAlign: 'center', opacity: 0.8 },
     bottomBar: {
-      minHeight: Math.max(70, Math.round(74 * scale)) + bottomInset,
+      minHeight: (isLandscape ? Math.max(54, Math.round(58 * scale)) : Math.max(70, Math.round(74 * scale))) + bottomInset,
       flexDirection: 'row', backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: colors.border, paddingBottom: Math.max(bottomInset, 8), paddingTop: 3,
+      borderTopColor: colors.border, paddingBottom: Math.max(bottomInset, isLandscape ? 4 : 8), paddingTop: isLandscape ? 1 : 3,
     },
     bottomAction: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 10, marginHorizontal: 4 },
     bottomActionPressed: { backgroundColor: colors.pressed },
@@ -944,17 +1046,25 @@ function createStyles(colors: Palette, scale: number, bottomInset: number) {
       alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary, borderWidth: 1.5, borderColor: colors.surface,
     },
     addIconPlus: { color: colors.primaryText, fontSize: font(11), lineHeight: font(12), fontWeight: '900' },
-    bottomActionText: { marginTop: 4, fontSize: font(11.5), fontWeight: '700', color: colors.text },
+    bottomActionText: { marginTop: isLandscape ? 1 : 4, fontSize: font(isLandscape ? 10.5 : 11.5), fontWeight: '700', color: colors.text },
     overlay: { flex: 1, backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'flex-end' },
     dialogOverlay: { flex: 1, backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'center', padding: 20 },
-    sheet: { width: '100%', backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, paddingBottom: 20 + bottomInset },
+    sheet: { width: isLandscape ? '68%' : '100%', maxHeight: '92%', backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, paddingBottom: 20 + bottomInset },
+    storageSheet: { width: isLandscape ? '68%' : '100%', maxHeight: '92%', backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, paddingBottom: 20 + bottomInset },
+    storageRow: { minHeight: 64, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, paddingHorizontal: 4 },
+    storageIcon: { width: 44, fontSize: font(25) },
+    storageTextWrap: { flex: 1, minWidth: 0 },
+    storageName: { color: colors.text, fontSize: font(15), fontWeight: '800' },
+    storageType: { marginTop: 2, color: colors.textMuted, fontSize: font(11.5), fontWeight: '600' },
+    storagePath: { marginTop: 2, color: colors.textMuted, fontSize: font(9.8) },
+    storageActive: { color: colors.success, fontSize: font(20), fontWeight: '900', paddingHorizontal: 8 },
     sheetTitle: { fontSize: font(17), fontWeight: '800', color: colors.text, paddingHorizontal: 4, paddingBottom: 10 },
     sheetAction: { minHeight: 50, justifyContent: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
     sheetActionText: { fontSize: font(15.5), color: colors.text },
     dangerText: { color: colors.danger, fontWeight: '700' },
     sheetCancel: { marginTop: 10, minHeight: 48, justifyContent: 'center', alignItems: 'center', borderRadius: 10, backgroundColor: colors.surfaceAlt },
     sheetCancelText: { fontSize: font(14.5), fontWeight: '700', color: colors.text },
-    dialog: { width: '100%', maxWidth: 420, backgroundColor: colors.surface, borderRadius: 16, padding: 18 },
+    dialog: { width: '100%', maxWidth: isLandscape ? 520 : 420, backgroundColor: colors.surface, borderRadius: 16, padding: 18 },
     dialogTitle: { fontSize: font(18), fontWeight: '800', color: colors.text },
     input: { marginTop: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.input, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11, fontSize: font(16), color: colors.text },
     dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 18 },
@@ -962,7 +1072,8 @@ function createStyles(colors: Palette, scale: number, bottomInset: number) {
     dialogSaveButton: { backgroundColor: colors.primary },
     dialogCancelText: { color: colors.textMuted, fontWeight: '700', fontSize: font(14) },
     dialogSaveText: { color: colors.primaryText, fontWeight: '800', fontSize: font(14) },
-    aboutSheet: { width: '100%', backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 18, paddingBottom: 20 + bottomInset },
+    aboutSheet: { width: isLandscape ? '78%' : '100%', maxHeight: isLandscape ? '94%' : '90%', backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
+    aboutScrollContent: { padding: 18, paddingBottom: 20 + bottomInset },
     aboutBrandRow: { flexDirection: 'row', alignItems: 'center' },
     aboutLogo: { width: 52, height: 52, borderRadius: 13, marginRight: 12 },
     aboutBrandText: { flex: 1 },

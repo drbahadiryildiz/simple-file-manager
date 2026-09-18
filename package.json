@@ -1,13 +1,15 @@
 {
   "name": "simple-file-manager",
-  "version": "1.3.0",
+  "version": "1.3.4",
   "private": true,
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
     "typecheck": "tsc --noEmit",
-    "build:apk": "eas build -p android --profile preview"
+    "build:apk": "eas build -p android --profile preview",
+    "build:release": "eas build -p android --profile release",
+    "build:aab": "eas build -p android --profile production"
   },
   "dependencies": {
     "expo": "~57.0.9",
@@ -20,5 +22,15 @@
   "devDependencies": {
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3"
+  },
+  "description": "Lightweight Android file manager built with Expo/React Native and a native Android storage module.",
+  "author": "Bahadir Yildiz <bahadir@bahadiryildiz.net>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/drbahadiryildiz/simple-file-manager.git"
+  },
+  "homepage": "https://github.com/drbahadiryildiz/simple-file-manager#readme",
+  "bugs": {
+    "url": "https://github.com/drbahadiryildiz/simple-file-manager/issues"
   }
 }
