@@ -3,7 +3,7 @@
     "name": "Simple File Manager",
     "slug": "simple-file-manager",
     "owner": "dr.bahadiryildiz",
-    "version": "1.3.5",
+    "version": "1.4.0",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
     "icon": "./assets/icon.png",
@@ -24,7 +24,7 @@
     ],
     "android": {
       "package": "com.local.simplefilemanager",
-      "versionCode": 10,
+      "versionCode": 11,
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

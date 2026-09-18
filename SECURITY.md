@@ -2,7 +2,7 @@
 
 ## Desteklenen sürüm
 
-Güncel desteklenen sürüm: **1.3.4**
+Güncel desteklenen sürüm: **1.4.0**
 
 ## Güvenlik açığı bildirimi
 

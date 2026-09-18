@@ -4,8 +4,8 @@
 
 Android için sade, çevrimdışı ve yerel çalışan bir dosya yöneticisi.
 
-**Güncel sürüm:** `1.3.5`  
-**Android versionCode:** `10`
+**Güncel sürüm:** `1.4.0`  
+**Android versionCode:** `11`
 
 ## Özellikler
 
@@ -13,6 +13,8 @@ Android için sade, çevrimdışı ve yerel çalışan bir dosya yöneticisi.
 - SD kart / desteklenen USB depolama birimlerini `Harici Depolama` olarak gösterme
 - Dosya ve klasör oluşturma
 - Ada, boyuta ve değişiklik tarihine göre sıralama
+- Çoklu dil desteği: English, Türkçe, Deutsch, Français, Español, Italiano, Português, Русский
+- İlk açılış dili İngilizce; seçilen dil cihazda saklanır
 - Yeniden adlandırma
 - Kopyalama ve taşıma
 - Silme

@@ -2,6 +2,15 @@
 
 Bu projedeki önemli kullanıcıya dönük değişiklikler bu dosyada tutulur.
 
+## [1.4.0] - 2026-09-18
+
+- Çoklu dil desteği eklendi.
+- İlk açılış dili İngilizce olarak ayarlandı.
+- English, Türkçe, Deutsch, Français, Español, Italiano, Português ve Русский eklendi.
+- Dil seçimi Hakkında ekranına eklendi ve seçim cihazda kalıcı olarak saklanıyor.
+- Sıralama etiketleri, depolama adları, işlem menüleri, izin açıklamaları ve geri bildirim metinleri seçilen dile göre gösteriliyor.
+- Tarih biçimi seçilen dile göre yerelleştiriliyor.
+
 ## [1.3.5] - 2026-09-18
 
 - Dosya sıralama menüsü eklendi.

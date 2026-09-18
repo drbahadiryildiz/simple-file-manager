@@ -18,6 +18,7 @@ export type NativeFileEntry = {
 type NativeSettings = {
   theme?: string | null;
   scale?: number | null;
+  language?: string | null;
 };
 
 type SimpleFileManagerNativeModule = {
@@ -34,7 +35,7 @@ type SimpleFileManagerNativeModule = {
   move(source: string, destination: string, overwrite: boolean): Promise<boolean>;
   openFile(path: string, mime: string): Promise<boolean>;
   getSettings(): Promise<NativeSettings>;
-  saveSettings(theme: string, scale: number): Promise<boolean>;
+  saveSettings(theme: string, scale: number, language: string): Promise<boolean>;
 };
 
 export default requireNativeModule<SimpleFileManagerNativeModule>('SimpleFileManagerNative');
