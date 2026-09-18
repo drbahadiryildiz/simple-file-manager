@@ -39,5 +39,5 @@ npx eas-cli@latest build -p android --profile production
 
 ## Sürüm
 
-Güncel sürüm: `1.3.4`  
-Android versionCode: `9`
+Güncel sürüm: `1.3.5`  
+Android versionCode: `10`
