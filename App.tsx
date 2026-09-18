@@ -1,6 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import NativeStorage from './modules/simple-file-manager-native';
+import { LANGUAGES, LANGUAGE_LOCALES, Language, TranslationKey, isLanguage, languageName, translate } from './i18n';
 import {
   ActivityIndicator,
   Alert,
@@ -56,6 +57,7 @@ type ClipboardState = {
 type AppSettings = {
   theme: ThemeMode;
   scale: number;
+  language: Language;
 };
 
 type Palette = {
@@ -77,20 +79,20 @@ type Palette = {
 
 const PACKAGE_NAME = 'com.local.simplefilemanager';
 const APP_NAME = 'Simple File Manager';
-const APP_VERSION = '1.3.5';
+const APP_VERSION = '1.4.0';
 const CONTACT_EMAIL = 'bahadir@bahadiryildiz.net';
 const ROOT_PATH = Platform.OS === 'android' ? NativeStorage.getRootPath() : '';
 const MIN_SCALE = 0.8;
 const MAX_SCALE = 1.4;
 const SCALE_STEP = 0.1;
 
-const SORT_OPTIONS: Array<{ value: SortMode; label: string }> = [
-  { value: 'name-asc', label: 'Ada göre (A → Z)' },
-  { value: 'name-desc', label: 'Ada göre (Z → A)' },
-  { value: 'size-asc', label: 'Boyuta göre (Küçük → Büyük)' },
-  { value: 'size-desc', label: 'Boyuta göre (Büyük → Küçük)' },
-  { value: 'date-desc', label: 'Tarihe göre (Yeni → Eski)' },
-  { value: 'date-asc', label: 'Tarihe göre (Eski → Yeni)' },
+const SORT_OPTIONS: SortMode[] = [
+  'name-asc',
+  'name-desc',
+  'size-asc',
+  'size-desc',
+  'date-desc',
+  'date-asc',
 ];
 
 const LIGHT: Palette = {
@@ -161,10 +163,10 @@ function formatSize(bytes?: number | null) {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
-function formatDate(timestamp?: number | null) {
+function formatDate(timestamp: number | null | undefined, language: Language) {
   if (!timestamp || Number.isNaN(timestamp)) return '';
   try {
-    return new Date(timestamp).toLocaleString('tr-TR', {
+    return new Date(timestamp).toLocaleString(LANGUAGE_LOCALES[language], {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
@@ -176,17 +178,26 @@ function formatDate(timestamp?: number | null) {
   }
 }
 
-function sortLabel(mode: SortMode) {
-  return SORT_OPTIONS.find(option => option.value === mode)?.label ?? 'Sıralama';
+function sortLabel(mode: SortMode, language: Language) {
+  const keys: Record<SortMode, TranslationKey> = {
+    'name-asc': 'sortNameAsc',
+    'name-desc': 'sortNameDesc',
+    'size-asc': 'sortSizeAsc',
+    'size-desc': 'sortSizeDesc',
+    'date-desc': 'sortDateDesc',
+    'date-asc': 'sortDateAsc',
+  };
+  return translate(language, keys[mode]);
 }
 
-function sortFileEntries(entries: FileEntry[], mode: SortMode) {
+function sortFileEntries(entries: FileEntry[], mode: SortMode, language: Language) {
+  const locale = LANGUAGE_LOCALES[language];
   return [...entries].sort((a, b) => {
     if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
 
     let result = 0;
     if (mode === 'name-asc' || mode === 'name-desc') {
-      result = a.name.localeCompare(b.name, 'tr', { sensitivity: 'base', numeric: true });
+      result = a.name.localeCompare(b.name, locale, { sensitivity: 'base', numeric: true });
       if (mode === 'name-desc') result *= -1;
     } else if (mode === 'size-asc' || mode === 'size-desc') {
       result = a.size - b.size;
@@ -197,7 +208,7 @@ function sortFileEntries(entries: FileEntry[], mode: SortMode) {
     }
 
     if (result === 0) {
-      return a.name.localeCompare(b.name, 'tr', { sensitivity: 'base', numeric: true });
+      return a.name.localeCompare(b.name, locale, { sensitivity: 'base', numeric: true });
     }
     return result;
   });
@@ -238,17 +249,18 @@ async function loadSettings(fallbackTheme: ThemeMode): Promise<AppSettings> {
     return {
       theme: parsed.theme === 'dark' || parsed.theme === 'light' ? parsed.theme : fallbackTheme,
       scale: typeof parsed.scale === 'number' ? clampScale(parsed.scale) : 1,
+      language: isLanguage(parsed.language) ? parsed.language : 'en',
     };
   } catch {
-    return { theme: fallbackTheme, scale: 1 };
+    return { theme: fallbackTheme, scale: 1, language: 'en' };
   }
 }
 
 async function saveSettings(settings: AppSettings) {
   try {
-    await NativeStorage.saveSettings(settings.theme, settings.scale);
+    await NativeStorage.saveSettings(settings.theme, settings.scale, settings.language);
   } catch {
-    // Görünüm ayarları dosya işlemlerini engellememeli.
+    // Display settings should never block file operations.
   }
 }
 
@@ -281,11 +293,13 @@ function AppContent() {
 
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [uiScale, setUiScale] = useState(1);
+  const [language, setLanguage] = useState<Language>('en');
   const [booting, setBooting] = useState(true);
   const [storageReady, setStorageReady] = useState(false);
   const [storageRoots, setStorageRoots] = useState<StorageRoot[]>([{ label: 'Dahili Depolama', path: ROOT_PATH, removable: false, primary: true }]);
   const [storagePickerVisible, setStoragePickerVisible] = useState(false);
   const [sortPickerVisible, setSortPickerVisible] = useState(false);
+  const [languagePickerVisible, setLanguagePickerVisible] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>('name-asc');
   const [stack, setStack] = useState<string[]>([ROOT_PATH]);
   const [items, setItems] = useState<FileEntry[]>([]);
@@ -301,26 +315,39 @@ function AppContent() {
   const operationLock = useRef(false);
 
   const currentPath = stack[stack.length - 1];
+  const tr = useCallback((key: TranslationKey, vars?: Record<string, string | number>) => translate(language, key, vars), [language]);
+  const storageLabel = useCallback((root?: StorageRoot | null) => {
+    if (!root) return tr('storage');
+    if (root.primary) return tr('internalStorage');
+    if (root.removable) return tr('externalStorage');
+    return tr('genericStorage');
+  }, [tr]);
   const colors = theme === 'dark' ? DARK : LIGHT;
   const styles = useMemo(() => createStyles(colors, uiScale, insets.bottom, isLandscape), [colors, uiScale, insets.bottom, isLandscape]);
   const currentStorage = storageRoots.find(root => normalizePath(currentPath).startsWith(normalizePath(root.path))) ?? storageRoots[0];
-  const title = stack.length === 1 ? (currentStorage?.label || 'Depolama') : baseName(currentPath);
-  const sortedItems = useMemo(() => sortFileEntries(items, sortMode), [items, sortMode]);
+  const title = stack.length === 1 ? storageLabel(currentStorage) : baseName(currentPath);
+  const sortedItems = useMemo(() => sortFileEntries(items, sortMode, language), [items, sortMode, language]);
 
-  const persistSettings = useCallback((nextTheme: ThemeMode, nextScale: number) => {
-    void saveSettings({ theme: nextTheme, scale: nextScale });
+  const persistSettings = useCallback((nextTheme: ThemeMode, nextScale: number, nextLanguage: Language) => {
+    void saveSettings({ theme: nextTheme, scale: nextScale, language: nextLanguage });
   }, []);
 
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
-    persistSettings(next, uiScale);
+    persistSettings(next, uiScale, language);
   };
 
   const changeScale = (delta: number) => {
     const next = clampScale(uiScale + delta);
     setUiScale(next);
-    persistSettings(theme, next);
+    persistSettings(theme, next, language);
+  };
+
+  const changeLanguage = (nextLanguage: Language) => {
+    setLanguage(nextLanguage);
+    setLanguagePickerVisible(false);
+    persistSettings(theme, uiScale, nextLanguage);
   };
 
   const loadStorageRoots = useCallback(async () => {
@@ -330,7 +357,7 @@ function AppContent() {
       const normalized = roots
         .filter(root => !!root.path)
         .map(root => ({
-          label: root.primary ? 'Dahili Depolama' : root.removable ? 'Harici Depolama' : (root.label || 'Depolama'),
+          label: root.label || '',
           path: normalizePath(root.path),
           removable: !!root.removable,
           primary: !!root.primary,
@@ -353,10 +380,10 @@ function AppContent() {
       if (!usable) {
         setItems([]);
         setAccessIssueKind('permission');
-        setAccessError('Depolama okunabiliyor olabilir ancak dosya yazma yetkisi yok. “Tüm dosyalara erişim” özel iznini açın.');
+        setAccessError(translate('en', 'storageWriteAccessMissing'));
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error ?? 'Depolamaya erişilemiyor.');
+      const message = error instanceof Error ? error.message : String(error ?? translate('en', 'storageUnavailable'));
       setItems([]);
       setAccessError(message);
       if (isProtectedAndroidPath(path)) {
@@ -373,7 +400,7 @@ function AppContent() {
 
   const refresh = useCallback(async () => {
     await refreshPath(currentPath);
-  }, [currentPath, refreshPath]);
+  }, [currentPath, refreshPath, tr]);
 
   const requestStorageAccess = useCallback(async () => {
     if (Platform.OS !== 'android') return;
@@ -391,20 +418,20 @@ function AppContent() {
       }
     } catch (error) {
       Alert.alert(
-        'İzin ekranı açılamadı',
-        error instanceof Error ? error.message : 'Android özel dosya erişimi ekranı açılamadı.'
+        tr('permissionScreenFailed'),
+        error instanceof Error ? error.message : tr('permissionScreenFailedMessage')
       );
     }
   }, [currentPath, refreshPath]);
 
   const showFsError = useCallback((heading: string, error: unknown, targetPath?: string) => {
-    const message = error instanceof Error ? error.message : String(error ?? 'Bilinmeyen hata');
+    const message = error instanceof Error ? error.message : String(error ?? tr('unknownError'));
     const path = targetPath || currentPath;
 
     if (isProtectedAndroidPath(path)) {
       Alert.alert(
         heading,
-        `${message}\n\nAndroid, diğer uygulamalara ait Android/data ve Android/obb içeriklerini sistem düzeyinde korur. Bu özel klasörlerde işlem yapılamaz.`
+        `${message}\n\n${tr('protectedErrorSuffix')}`
       );
       return;
     }
@@ -412,17 +439,17 @@ function AppContent() {
     if (looksLikePermissionError(error) || !storageReady) {
       Alert.alert(
         heading,
-        `${message}\n\n“Uygulama izinleri” sayfası yeterli değildir. Açılan özel “Tüm dosyalara erişim” ekranında Simple File Manager anahtarının açık olduğundan emin olun.`,
+        `${message}\n\n${tr('permissionErrorSuffix')}`,
         [
-          { text: 'Vazgeç', style: 'cancel' },
-          { text: 'Özel İzin Ekranını Aç', onPress: () => void requestStorageAccess() },
+          { text: tr('cancel'), style: 'cancel' },
+          { text: tr('openSpecialAccess'), onPress: () => void requestStorageAccess() },
         ]
       );
       return;
     }
 
     Alert.alert(heading, message);
-  }, [currentPath, requestStorageAccess, storageReady]);
+  }, [currentPath, requestStorageAccess, storageReady, tr]);
 
   useEffect(() => {
     let mounted = true;
@@ -431,6 +458,7 @@ function AppContent() {
       if (!mounted) return;
       setTheme(settings.theme);
       setUiScale(settings.scale);
+      setLanguage(settings.language);
       await loadStorageRoots();
       await refreshPath(ROOT_PATH);
       if (mounted) setBooting(false);
@@ -443,16 +471,16 @@ function AppContent() {
     permissionAlertShown.current = true;
     const timer = setTimeout(() => {
       Alert.alert(
-        'Dosya erişimi gerekli',
-        'Simple File Manager için Android’in özel “Tüm dosyalara erişim” yetkisini açmanız gerekiyor. Normal uygulama izinleri ekranından farklıdır.',
+        tr('fileAccessRequired'),
+        tr('permissionPromptMessage'),
         [
-          { text: 'Sonra', style: 'cancel' },
-          { text: 'İzin Ekranını Aç', onPress: () => void requestStorageAccess() },
+          { text: tr('later'), style: 'cancel' },
+          { text: tr('permissionScreenOpen'), onPress: () => void requestStorageAccess() },
         ]
       );
     }, 350);
     return () => clearTimeout(timer);
-  }, [booting, requestStorageAccess, storageReady]);
+  }, [booting, requestStorageAccess, storageReady, tr]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', state => {
@@ -470,6 +498,10 @@ function AppContent() {
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (languagePickerVisible) {
+        setLanguagePickerVisible(false);
+        return true;
+      }
       if (sortPickerVisible) {
         setSortPickerVisible(false);
         return true;
@@ -497,7 +529,7 @@ function AppContent() {
       return false;
     });
     return () => sub.remove();
-  }, [aboutVisible, editorMode, selected, sortPickerVisible, stack.length, storagePickerVisible]);
+  }, [aboutVisible, editorMode, languagePickerVisible, selected, sortPickerVisible, stack.length, storagePickerVisible]);
 
   const switchStorage = (root: StorageRoot) => {
     setStoragePickerVisible(false);
@@ -522,7 +554,7 @@ function AppContent() {
     try {
       await NativeStorage.openFile(item.path, mimeTypeForName(item.name));
     } catch (error) {
-      showFsError('Dosya açılamadı', error, item.path);
+      showFsError(tr('fileOpenFailed'), error, item.path);
     }
   };
 
@@ -534,7 +566,7 @@ function AppContent() {
 
   const startCreate = (mode: 'folder' | 'file') => {
     setSelected(null);
-    setEditorValue(mode === 'folder' ? 'Yeni klasör' : 'yeni_dosya.txt');
+    setEditorValue(mode === 'folder' ? tr('defaultNewFolderName') : tr('defaultNewFileName'));
     setEditorMode(mode);
   };
 
@@ -543,13 +575,13 @@ function AppContent() {
 
     const name = cleanName(editorValue);
     if (!isValidName(name)) {
-      Alert.alert('Geçersiz ad', 'Dosya veya klasör adında / veya \\ karakteri kullanılamaz.');
+      Alert.alert(tr('invalidNameTitle'), tr('invalidNameMessage'));
       return;
     }
 
     operationLock.current = true;
     try {
-      if (!storageReady) throw new Error('Dosya yazma yetkisi doğrulanamadı.');
+      if (!storageReady) throw new Error(tr('writeAccessUnverified'));
       const destination = joinPath(currentPath, name);
 
       if (editorMode === 'rename' && selected && normalizePath(selected.path) === normalizePath(destination)) {
@@ -559,7 +591,7 @@ function AppContent() {
         return;
       }
 
-      if (await NativeStorage.exists(destination)) throw new Error('Bu isimde bir dosya veya klasör zaten var.');
+      if (await NativeStorage.exists(destination)) throw new Error(tr('itemExists'));
 
       if (editorMode === 'rename' && selected) {
         await NativeStorage.move(selected.path, destination, false);
@@ -574,7 +606,7 @@ function AppContent() {
       setEditorValue('');
       await refresh();
     } catch (error) {
-      showFsError('İşlem başarısız', error, currentPath);
+      showFsError(tr('operationFailed'), error, currentPath);
     } finally {
       operationLock.current = false;
     }
@@ -584,25 +616,25 @@ function AppContent() {
     if (!selected) return;
     const item = selected;
     Alert.alert(
-      'Silinsin mi?',
+      tr('deleteConfirmTitle'),
       item.isDirectory
-        ? `“${item.name}” klasörü ve içindekiler kalıcı olarak silinecek.`
-        : `“${item.name}” kalıcı olarak silinecek.`,
+        ? tr('deleteFolderConfirm', { name: item.name })
+        : tr('deleteFileConfirm', { name: item.name }),
       [
-        { text: 'Vazgeç', style: 'cancel' },
+        { text: tr('cancel'), style: 'cancel' },
         {
-          text: 'Sil',
+          text: tr('delete'),
           style: 'destructive',
           onPress: async () => {
             if (operationLock.current) return;
             operationLock.current = true;
             try {
-              if (!storageReady) throw new Error('Dosya yazma yetkisi doğrulanamadı.');
+              if (!storageReady) throw new Error(tr('writeAccessUnverified'));
               await NativeStorage.delete(item.path);
               setSelected(null);
               await refresh();
             } catch (error) {
-              showFsError('Silinemedi', error, item.path);
+              showFsError(tr('deleteFailed'), error, item.path);
             } finally {
               operationLock.current = false;
             }
@@ -626,27 +658,27 @@ function AppContent() {
     const destinationNormalized = normalizePath(destination);
 
     if (source.isDirectory && `${normalizePath(currentPath)}/`.startsWith(`${sourceNormalized}/`)) {
-      Alert.alert('Geçersiz hedef', 'Bir klasör kendi içine veya alt klasörlerinden birine kopyalanamaz/taşınamaz.');
+      Alert.alert(tr('invalidDestination'), tr('invalidDestinationMessage'));
       return;
     }
     if (destinationNormalized === sourceNormalized) {
-      Alert.alert('Aynı klasör', 'Kaynak ve hedef aynı.');
+      Alert.alert(tr('sameFolder'), tr('sameFolderMessage'));
       return;
     }
 
     operationLock.current = true;
     try {
-      if (!storageReady) throw new Error('Dosya yazma yetkisi doğrulanamadı.');
+      if (!storageReady) throw new Error(tr('writeAccessUnverified'));
 
       const destinationExists = await NativeStorage.exists(destination);
       if (destinationExists && !overwrite) {
         operationLock.current = false;
         Alert.alert(
-          'Aynı isimde öğe var',
-          `Hedef klasörde “${source.name}” zaten var. Mevcut öğenin üzerine yazılsın mı?`,
+          tr('sameNameTitle'),
+          tr('overwriteMessage', { name: source.name }),
           [
-            { text: 'Vazgeç', style: 'cancel' },
-            { text: 'Üzerine Yaz', style: 'destructive', onPress: () => void paste(true) },
+            { text: tr('cancel'), style: 'cancel' },
+            { text: tr('overwrite'), style: 'destructive', onPress: () => void paste(true) },
           ]
         );
         return;
@@ -654,27 +686,28 @@ function AppContent() {
 
       if (clipboard.mode === 'copy') {
         await NativeStorage.copy(source.path, destination, overwrite);
-        Alert.alert('Kopyalandı', `“${source.name}” bu klasöre kopyalandı.`);
+        Alert.alert(tr('copiedTitle'), tr('copiedMessage', { name: source.name }));
       } else {
         await NativeStorage.move(source.path, destination, overwrite);
         setClipboard(null);
       }
       await refresh();
     } catch (error) {
-      showFsError('İşlem başarısız', error, currentPath);
+      showFsError(tr('operationFailed'), error, currentPath);
     } finally {
       operationLock.current = false;
     }
   };
 
-  const sendFeedback = async (kind: 'Hata Bildirimi' | 'Özellik Talebi' | 'Düzenleme Talebi') => {
-    const subject = `[${APP_NAME}] ${kind}`;
-    const body = `${kind}\n\nAçıklama:\n\nCihaz / Android sürümü (varsa):\n`;
+  const sendFeedback = async (kind: 'bug' | 'feature' | 'edit') => {
+    const kindLabel = kind === 'bug' ? tr('feedbackBug') : kind === 'feature' ? tr('feedbackFeature') : tr('feedbackEdit');
+    const subject = `[${APP_NAME}] ${kindLabel}`;
+    const body = `${kindLabel}\n\n${tr('descriptionLabel')}:\n\n${tr('deviceAndroidLabel')}:\n`;
     const url = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     try {
       await Linking.openURL(url);
     } catch {
-      Alert.alert('E-posta açılamadı', `İletişim: ${CONTACT_EMAIL}`);
+      Alert.alert(tr('emailFailed'), `${tr('contactPrefix')}: ${CONTACT_EMAIL}`);
     }
   };
 
@@ -686,7 +719,7 @@ function AppContent() {
           <Image source={require('./assets/icon.png')} style={styles.bootLogo} resizeMode="contain" />
           <Text style={styles.bootTitle}>{APP_NAME}</Text>
           <ActivityIndicator size="large" color="#6d91ff" style={styles.bootSpinner} />
-          <Text style={styles.bootText}>Açılıyor…</Text>
+          <Text style={styles.bootText}>{tr('opening')}</Text>
         </View>
       </SafeAreaView>
     );
@@ -700,10 +733,10 @@ function AppContent() {
         <Image source={require('./assets/icon.png')} style={styles.logoImage} resizeMode="contain" />
         <View style={styles.brandTextWrap}>
           <Text style={styles.brandTitle} numberOfLines={1}>{APP_NAME}</Text>
-          {!isLandscape && <Text style={styles.brandSubtitle} numberOfLines={1}>Dosya Yöneticisi</Text>}
+          {!isLandscape && <Text style={styles.brandSubtitle} numberOfLines={1}>{tr('fileManager')}</Text>}
         </View>
         <Pressable
-          accessibilityLabel="Görünümü küçült"
+          accessibilityLabel={tr('decreaseView')}
           onPress={() => changeScale(-SCALE_STEP)}
           disabled={uiScale <= MIN_SCALE}
           style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed, uiScale <= MIN_SCALE && styles.disabled]}
@@ -711,7 +744,7 @@ function AppContent() {
           <Text style={styles.scaleButtonText}>A−</Text>
         </Pressable>
         <Pressable
-          accessibilityLabel="Görünümü büyüt"
+          accessibilityLabel={tr('increaseView')}
           onPress={() => changeScale(SCALE_STEP)}
           disabled={uiScale >= MAX_SCALE}
           style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed, uiScale >= MAX_SCALE && styles.disabled]}
@@ -719,14 +752,14 @@ function AppContent() {
           <Text style={styles.scaleButtonText}>A+</Text>
         </Pressable>
         <Pressable
-          accessibilityLabel={theme === 'dark' ? 'Açık temaya geç' : 'Karanlık temaya geç'}
+          accessibilityLabel={theme === 'dark' ? tr('switchLightTheme') : tr('switchDarkTheme')}
           onPress={toggleTheme}
           style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed]}
         >
           <Text style={styles.brandButtonText}>{theme === 'dark' ? '☀' : '☾'}</Text>
         </Pressable>
         <Pressable
-          accessibilityLabel="Hakkında"
+          accessibilityLabel={tr('about')}
           onPress={() => setAboutVisible(true)}
           style={({ pressed }) => [styles.brandButton, pressed && styles.brandButtonPressed]}
         >
@@ -736,7 +769,7 @@ function AppContent() {
 
       <View style={styles.navHeader}>
         <Pressable
-          accessibilityLabel="Üst klasöre çık"
+          accessibilityLabel={tr('goUp')}
           onPress={goUp}
           disabled={stack.length === 1}
           style={[styles.headerButton, stack.length === 1 && styles.disabled]}
@@ -746,7 +779,7 @@ function AppContent() {
         <Pressable
           style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.headerTitlePressed]}
           onPress={() => { void loadStorageRoots(); setStoragePickerVisible(true); }}
-          accessibilityLabel="Depolama birimini değiştir"
+          accessibilityLabel={tr('changeStorage')}
         >
           <Text style={styles.headerTitle} numberOfLines={1}>{title} <Text style={styles.storageChevron}>⌄</Text></Text>
           <Text style={styles.headerPath} numberOfLines={1} ellipsizeMode="middle">{currentPath}</Text>
@@ -755,11 +788,11 @@ function AppContent() {
         <Pressable
           onPress={() => setSortPickerVisible(true)}
           style={styles.smallHeaderButton}
-          accessibilityLabel={`Sıralama: ${sortLabel(sortMode)}`}
+          accessibilityLabel={`${tr('sort')}: ${sortLabel(sortMode, language)}`}
         >
           <Text style={styles.sortButtonText}>⇅</Text>
         </Pressable>
-        <Pressable onPress={() => void refresh()} style={styles.smallHeaderButton} accessibilityLabel="Yenile">
+        <Pressable onPress={() => void refresh()} style={styles.smallHeaderButton} accessibilityLabel={tr('refresh')}>
           <Text style={styles.smallHeaderButtonText}>↻</Text>
         </Pressable>
       </View>
@@ -768,12 +801,12 @@ function AppContent() {
         <View style={styles.clipboardBar}>
           <View style={styles.clipboardTextWrap}>
             <Text style={styles.clipboardTitle} numberOfLines={1}>
-              {clipboard.mode === 'copy' ? 'Kopyalanacak' : 'Taşınacak'}: {clipboard.item.name}
+              {clipboard.mode === 'copy' ? tr('toCopy') : tr('toMove')}: {clipboard.item.name}
             </Text>
-            <Text style={styles.clipboardHint}>Hedef klasöre gidip Yapıştır'a bas.</Text>
+            <Text style={styles.clipboardHint}>{tr('clipboardHint')}</Text>
           </View>
           <Pressable onPress={() => void paste()} style={styles.pasteButton}>
-            <Text style={styles.pasteButtonText}>Yapıştır</Text>
+            <Text style={styles.pasteButtonText}>{tr('paste')}</Text>
           </Pressable>
           <Pressable onPress={() => setClipboard(null)} style={styles.cancelClipboardButton}>
             <Text style={styles.cancelClipboardText}>×</Text>
@@ -785,33 +818,33 @@ function AppContent() {
         {loading ? (
           <View style={styles.center}>
             <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={styles.muted}>Dosyalar okunuyor…</Text>
+            <Text style={styles.muted}>{tr('filesLoading')}</Text>
           </View>
         ) : accessError ? (
           <View style={styles.center}>
             <Text style={styles.lockIcon}>{accessIssueKind === 'protected' ? '🛡️' : '🔒'}</Text>
             <Text style={styles.accessTitle}>
-              {accessIssueKind === 'protected' ? 'Android tarafından korunan klasör' : accessIssueKind === 'permission' ? 'Dosya erişimi gerekli' : 'Klasör açılamadı'}
+              {accessIssueKind === 'protected' ? tr('protectedFolder') : accessIssueKind === 'permission' ? tr('fileAccessRequired') : tr('folderOpenFailed')}
             </Text>
             <Text style={styles.accessText}>
               {accessIssueKind === 'protected'
-                ? 'Android/data ve Android/obb içindeki diğer uygulama verileri Android tarafından ayrıca korunur.'
+                ? tr('protectedFolderMessage')
                 : accessIssueKind === 'permission'
-                  ? 'Normal “Uygulama izinleri” ekranı yeterli değildir. Android’in özel “Tüm dosyalara erişim” ekranında Simple File Manager anahtarını açın.'
-                  : 'Bu klasör cihaz veya sistem tarafından kısıtlanıyor olabilir.'}
+                  ? tr('permissionScreenMessage')
+                  : tr('folderRestricted')}
             </Text>
             {accessIssueKind === 'permission' && (
               <Pressable style={styles.primaryButton} onPress={() => void requestStorageAccess()}>
-                <Text style={styles.primaryButtonText}>Özel Dosya Erişimi İznini Aç</Text>
+                <Text style={styles.primaryButtonText}>{tr('openSpecialAccess')}</Text>
               </Pressable>
             )}
             {stack.length > 1 && (
               <Pressable style={styles.secondaryButton} onPress={goUp}>
-                <Text style={styles.secondaryButtonText}>Üst Klasöre Dön</Text>
+                <Text style={styles.secondaryButtonText}>{tr('goParent')}</Text>
               </Pressable>
             )}
             <Pressable style={styles.secondaryButton} onPress={() => void refresh()}>
-              <Text style={styles.secondaryButtonText}>Tekrar Dene</Text>
+              <Text style={styles.secondaryButtonText}>{tr('tryAgain')}</Text>
             </Pressable>
             <Text style={styles.errorDetail} numberOfLines={4}>{accessError}</Text>
           </View>
@@ -822,7 +855,7 @@ function AppContent() {
             contentContainerStyle={sortedItems.length === 0 ? styles.emptyList : styles.listContent}
             ListEmptyComponent={
               <View style={styles.center}>
-                <Text style={styles.muted}>Bu klasör boş.</Text>
+                <Text style={styles.muted}>{tr('emptyFolder')}</Text>
               </View>
             }
             renderItem={({ item }) => (
@@ -835,7 +868,7 @@ function AppContent() {
                 <View style={styles.rowText}>
                   <Text style={styles.fileName} numberOfLines={1} ellipsizeMode="middle">{item.name}</Text>
                   <Text style={styles.metaText}>
-                    {item.isDirectory ? 'Klasör' : formatSize(item.size)}{formatDate(item.lastModified) ? ` • ${formatDate(item.lastModified)}` : ''}
+                    {item.isDirectory ? tr('folder') : formatSize(item.size)}{formatDate(item.lastModified, language) ? ` • ${formatDate(item.lastModified, language)}` : ''}
                   </Text>
                 </View>
                 <Pressable hitSlop={10} onPress={() => setSelected(item)} style={styles.moreButton}>
@@ -854,14 +887,14 @@ function AppContent() {
               <Text style={styles.bottomActionIcon}>📁</Text>
               <View style={styles.addIconBadge}><Text style={styles.addIconPlus}>+</Text></View>
             </View>
-            <Text style={styles.bottomActionText}>Klasör oluştur</Text>
+            <Text style={styles.bottomActionText}>{tr('createFolder')}</Text>
           </Pressable>
           <Pressable style={({ pressed }) => [styles.bottomAction, pressed && styles.bottomActionPressed]} onPress={() => startCreate('file')}>
             <View style={styles.addIconWrap}>
               <Text style={styles.bottomActionIcon}>📄</Text>
               <View style={styles.addIconBadge}><Text style={styles.addIconPlus}>+</Text></View>
             </View>
-            <Text style={styles.bottomActionText}>Dosya oluştur</Text>
+            <Text style={styles.bottomActionText}>{tr('createFile')}</Text>
           </Pressable>
         </View>
       )}
@@ -869,26 +902,26 @@ function AppContent() {
       <Modal visible={sortPickerVisible} transparent animationType="fade" onRequestClose={() => setSortPickerVisible(false)}>
         <Pressable style={styles.overlay} onPress={() => setSortPickerVisible(false)}>
           <Pressable style={styles.storageSheet} onPress={() => {}}>
-            <Text style={styles.sheetTitle}>Sıralama</Text>
+            <Text style={styles.sheetTitle}>{tr('sortTitle')}</Text>
             {SORT_OPTIONS.map(option => {
-              const active = sortMode === option.value;
+              const active = sortMode === option;
               return (
                 <Pressable
-                  key={option.value}
+                  key={option}
                   style={styles.sortRow}
                   onPress={() => {
-                    setSortMode(option.value);
+                    setSortMode(option);
                     setSortPickerVisible(false);
                   }}
                 >
-                  <Text style={[styles.sortRowText, active && styles.sortRowTextActive]}>{option.label}</Text>
+                  <Text style={[styles.sortRowText, active && styles.sortRowTextActive]}>{sortLabel(option, language)}</Text>
                   {active && <Text style={styles.storageActive}>✓</Text>}
                 </Pressable>
               );
             })}
-            <Text style={styles.sortHint}>Klasörler her zaman dosyaların üstünde gösterilir.</Text>
+            <Text style={styles.sortHint}>{tr('foldersFirst')}</Text>
             <Pressable style={styles.sheetCancel} onPress={() => setSortPickerVisible(false)}>
-              <Text style={styles.sheetCancelText}>Kapat</Text>
+              <Text style={styles.sheetCancelText}>{tr('close')}</Text>
             </Pressable>
           </Pressable>
         </Pressable>
@@ -897,7 +930,7 @@ function AppContent() {
       <Modal visible={storagePickerVisible} transparent animationType="fade" onRequestClose={() => setStoragePickerVisible(false)}>
         <Pressable style={styles.overlay} onPress={() => setStoragePickerVisible(false)}>
           <Pressable style={styles.storageSheet} onPress={() => {}}>
-            <Text style={styles.sheetTitle}>Depolama</Text>
+            <Text style={styles.sheetTitle}>{tr('storage')}</Text>
             {storageRoots.map(root => {
               const active = currentStorage && normalizePath(root.path) === normalizePath(currentStorage.path);
               return (
@@ -908,9 +941,9 @@ function AppContent() {
                 >
                   <Text style={styles.storageIcon}>{root.removable ? '💾' : '📱'}</Text>
                   <View style={styles.storageTextWrap}>
-                    <Text style={styles.storageName} numberOfLines={1}>{root.label}</Text>
+                    <Text style={styles.storageName} numberOfLines={1}>{storageLabel(root)}</Text>
                     <Text style={styles.storageType} numberOfLines={1}>
-                      {root.primary ? 'Telefonun ortak depolama alanı' : root.removable ? 'SD kart veya USB depolama' : 'Ek depolama alanı'}
+                      {root.primary ? tr('phoneStorage') : root.removable ? tr('externalStorageHint') : tr('extraStorage')}
                     </Text>
                     <Text style={styles.storagePath} numberOfLines={1} ellipsizeMode="middle">{root.path}</Text>
                   </View>
@@ -919,7 +952,7 @@ function AppContent() {
               );
             })}
             <Pressable style={styles.sheetCancel} onPress={() => setStoragePickerVisible(false)}>
-              <Text style={styles.sheetCancelText}>Kapat</Text>
+              <Text style={styles.sheetCancelText}>{tr('close')}</Text>
             </Pressable>
           </Pressable>
         </Pressable>
@@ -938,23 +971,23 @@ function AppContent() {
                   void openFile(item);
                 }}
               >
-                <Text style={styles.sheetActionText}>Aç</Text>
+                <Text style={styles.sheetActionText}>{tr('open')}</Text>
               </Pressable>
             )}
             <Pressable style={styles.sheetAction} onPress={() => setClipboardFromSelected('copy')}>
-              <Text style={styles.sheetActionText}>Kopyala</Text>
+              <Text style={styles.sheetActionText}>{tr('copy')}</Text>
             </Pressable>
             <Pressable style={styles.sheetAction} onPress={() => setClipboardFromSelected('move')}>
-              <Text style={styles.sheetActionText}>Taşı</Text>
+              <Text style={styles.sheetActionText}>{tr('move')}</Text>
             </Pressable>
             <Pressable style={styles.sheetAction} onPress={startRename}>
-              <Text style={styles.sheetActionText}>Yeniden adlandır</Text>
+              <Text style={styles.sheetActionText}>{tr('rename')}</Text>
             </Pressable>
             <Pressable style={styles.sheetAction} onPress={removeSelected}>
-              <Text style={[styles.sheetActionText, styles.dangerText]}>Sil</Text>
+              <Text style={[styles.sheetActionText, styles.dangerText]}>{tr('delete')}</Text>
             </Pressable>
             <Pressable style={styles.sheetCancel} onPress={() => setSelected(null)}>
-              <Text style={styles.sheetCancelText}>Vazgeç</Text>
+              <Text style={styles.sheetCancelText}>{tr('cancel')}</Text>
             </Pressable>
           </Pressable>
         </Pressable>
@@ -964,7 +997,7 @@ function AppContent() {
         <View style={styles.dialogOverlay}>
           <View style={styles.dialog}>
             <Text style={styles.dialogTitle}>
-              {editorMode === 'rename' ? 'Yeniden adlandır' : editorMode === 'folder' ? 'Yeni klasör' : 'Yeni dosya'}
+              {editorMode === 'rename' ? tr('rename') : editorMode === 'folder' ? tr('newFolder') : tr('newFile')}
             </Text>
             <TextInput
               autoFocus
@@ -977,10 +1010,10 @@ function AppContent() {
             />
             <View style={styles.dialogActions}>
               <Pressable style={styles.dialogButton} onPress={() => setEditorMode(null)}>
-                <Text style={styles.dialogCancelText}>Vazgeç</Text>
+                <Text style={styles.dialogCancelText}>{tr('cancel')}</Text>
               </Pressable>
               <Pressable style={[styles.dialogButton, styles.dialogSaveButton]} onPress={() => void saveEditor()}>
-                <Text style={styles.dialogSaveText}>Kaydet</Text>
+                <Text style={styles.dialogSaveText}>{tr('save')}</Text>
               </Pressable>
             </View>
           </View>
@@ -995,35 +1028,60 @@ function AppContent() {
               <Image source={require('./assets/icon.png')} style={styles.aboutLogo} resizeMode="contain" />
               <View style={styles.aboutBrandText}>
                 <Text style={styles.aboutTitle}>{APP_NAME}</Text>
-                <Text style={styles.aboutVersion}>Sürüm {APP_VERSION}</Text>
+                <Text style={styles.aboutVersion}>{tr('version')} {APP_VERSION}</Text>
               </View>
             </View>
-            <Text style={styles.aboutText}>Basit, çevrimdışı ve kişisel kullanım odaklı Android dosya yöneticisi.</Text>
-            <Text style={styles.aboutSectionTitle}>İletişim</Text>
+            <Text style={styles.aboutText}>{tr('aboutDescription')}</Text>
+            <Text style={styles.aboutSectionTitle}>{tr('language')}</Text>
+            <Pressable style={styles.languageButton} onPress={() => setLanguagePickerVisible(true)}>
+              <Text style={styles.languageButtonText}>{languageName(language)}</Text>
+              <Text style={styles.languageChevron}>›</Text>
+            </Pressable>
+            <Text style={styles.aboutSectionTitle}>{tr('contact')}</Text>
             <Pressable onPress={() => void Linking.openURL(`mailto:${CONTACT_EMAIL}`)}>
               <Text style={styles.emailText}>{CONTACT_EMAIL}</Text>
             </Pressable>
             {Platform.OS === 'android' && (
               <Pressable style={styles.storageSettingsButton} onPress={() => void requestStorageAccess()}>
-                <Text style={styles.storageSettingsButtonText}>Özel dosya erişimi ayarını aç</Text>
+                <Text style={styles.storageSettingsButtonText}>{tr('openStorageSettings')}</Text>
               </Pressable>
             )}
-            <Text style={styles.aboutHint}>Hata, özellik veya düzenleme talebinizi e-posta ile iletebilirsiniz.</Text>
+            <Text style={styles.aboutHint}>{tr('feedbackHint')}</Text>
             <View style={styles.feedbackButtons}>
-              <Pressable style={styles.feedbackButton} onPress={() => void sendFeedback('Hata Bildirimi')}>
-                <Text style={styles.feedbackButtonText}>Hata bildir</Text>
+              <Pressable style={styles.feedbackButton} onPress={() => void sendFeedback('bug')}>
+                <Text style={styles.feedbackButtonText}>{tr('reportBug')}</Text>
               </Pressable>
-              <Pressable style={styles.feedbackButton} onPress={() => void sendFeedback('Özellik Talebi')}>
-                <Text style={styles.feedbackButtonText}>Özellik iste</Text>
+              <Pressable style={styles.feedbackButton} onPress={() => void sendFeedback('feature')}>
+                <Text style={styles.feedbackButtonText}>{tr('requestFeature')}</Text>
               </Pressable>
-              <Pressable style={styles.feedbackButton} onPress={() => void sendFeedback('Düzenleme Talebi')}>
-                <Text style={styles.feedbackButtonText}>Düzenleme iste</Text>
+              <Pressable style={styles.feedbackButton} onPress={() => void sendFeedback('edit')}>
+                <Text style={styles.feedbackButtonText}>{tr('requestEdit')}</Text>
               </Pressable>
             </View>
             <Pressable style={styles.sheetCancel} onPress={() => setAboutVisible(false)}>
-              <Text style={styles.sheetCancelText}>Kapat</Text>
+              <Text style={styles.sheetCancelText}>{tr('close')}</Text>
             </Pressable>
             </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={languagePickerVisible} transparent animationType="fade" onRequestClose={() => setLanguagePickerVisible(false)}>
+        <Pressable style={styles.overlay} onPress={() => setLanguagePickerVisible(false)}>
+          <Pressable style={styles.storageSheet} onPress={() => {}}>
+            <Text style={styles.sheetTitle}>{tr('chooseLanguage')}</Text>
+            {LANGUAGES.map(option => {
+              const active = language === option.code;
+              return (
+                <Pressable key={option.code} style={styles.sortRow} onPress={() => changeLanguage(option.code)}>
+                  <Text style={[styles.sortRowText, active && styles.sortRowTextActive]}>{option.nativeName}</Text>
+                  {active && <Text style={styles.storageActive}>✓</Text>}
+                </Pressable>
+              );
+            })}
+            <Pressable style={styles.sheetCancel} onPress={() => setLanguagePickerVisible(false)}>
+              <Text style={styles.sheetCancelText}>{tr('close')}</Text>
+            </Pressable>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1182,6 +1240,9 @@ function createStyles(colors: Palette, scale: number, bottomInset: number, isLan
     emailText: { marginTop: 6, color: colors.primary, fontSize: font(14.5), fontWeight: '700' },
     storageSettingsButton: { marginTop: 12, alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 9, borderRadius: 9, backgroundColor: colors.primarySoft },
     storageSettingsButtonText: { color: colors.primary, fontSize: font(12.5), fontWeight: '800' },
+    languageButton: { marginTop: 8, minHeight: 46, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, borderRadius: 9, backgroundColor: colors.surfaceAlt },
+    languageButtonText: { flex: 1, color: colors.text, fontSize: font(14), fontWeight: '800' },
+    languageChevron: { color: colors.textMuted, fontSize: font(24), lineHeight: font(24) },
     aboutHint: { marginTop: 10, color: colors.textMuted, fontSize: font(12.5), lineHeight: font(18) },
     feedbackButtons: { flexDirection: 'row', gap: 7, marginTop: 14 },
     feedbackButton: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6, borderRadius: 9, backgroundColor: colors.primarySoft },
