@@ -31,6 +31,7 @@ import {
 type ThemeMode = 'light' | 'dark';
 type ClipboardMode = 'copy' | 'move';
 type AccessIssueKind = 'permission' | 'protected' | 'folder' | null;
+type SortMode = 'name-asc' | 'name-desc' | 'size-asc' | 'size-desc' | 'date-desc' | 'date-asc';
 
 type StorageRoot = {
   label: string;
@@ -44,6 +45,7 @@ type FileEntry = {
   path: string;
   isDirectory: boolean;
   size: number;
+  lastModified: number;
 };
 
 type ClipboardState = {
@@ -75,12 +77,21 @@ type Palette = {
 
 const PACKAGE_NAME = 'com.local.simplefilemanager';
 const APP_NAME = 'Simple File Manager';
-const APP_VERSION = '1.3.4';
+const APP_VERSION = '1.3.5';
 const CONTACT_EMAIL = 'bahadir@bahadiryildiz.net';
 const ROOT_PATH = Platform.OS === 'android' ? NativeStorage.getRootPath() : '';
 const MIN_SCALE = 0.8;
 const MAX_SCALE = 1.4;
 const SCALE_STEP = 0.1;
+
+const SORT_OPTIONS: Array<{ value: SortMode; label: string }> = [
+  { value: 'name-asc', label: 'Ada göre (A → Z)' },
+  { value: 'name-desc', label: 'Ada göre (Z → A)' },
+  { value: 'size-asc', label: 'Boyuta göre (Küçük → Büyük)' },
+  { value: 'size-desc', label: 'Boyuta göre (Büyük → Küçük)' },
+  { value: 'date-desc', label: 'Tarihe göre (Yeni → Eski)' },
+  { value: 'date-asc', label: 'Tarihe göre (Eski → Yeni)' },
+];
 
 const LIGHT: Palette = {
   background: '#f4f5f7',
@@ -150,6 +161,48 @@ function formatSize(bytes?: number | null) {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
+function formatDate(timestamp?: number | null) {
+  if (!timestamp || Number.isNaN(timestamp)) return '';
+  try {
+    return new Date(timestamp).toLocaleString('tr-TR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+
+function sortLabel(mode: SortMode) {
+  return SORT_OPTIONS.find(option => option.value === mode)?.label ?? 'Sıralama';
+}
+
+function sortFileEntries(entries: FileEntry[], mode: SortMode) {
+  return [...entries].sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+
+    let result = 0;
+    if (mode === 'name-asc' || mode === 'name-desc') {
+      result = a.name.localeCompare(b.name, 'tr', { sensitivity: 'base', numeric: true });
+      if (mode === 'name-desc') result *= -1;
+    } else if (mode === 'size-asc' || mode === 'size-desc') {
+      result = a.size - b.size;
+      if (mode === 'size-desc') result *= -1;
+    } else {
+      result = a.lastModified - b.lastModified;
+      if (mode === 'date-desc') result *= -1;
+    }
+
+    if (result === 0) {
+      return a.name.localeCompare(b.name, 'tr', { sensitivity: 'base', numeric: true });
+    }
+    return result;
+  });
+}
+
 function mimeTypeForName(name: string) {
   const ext = name.split('.').pop()?.toLowerCase();
   const types: Record<string, string> = {
@@ -210,17 +263,13 @@ async function verifyStorageAccess() {
 
 async function readDirectory(path: string): Promise<FileEntry[]> {
   const result = await NativeStorage.list(path);
-  return result
-    .map(item => ({
-      name: item.name,
-      path: item.path,
-      isDirectory: item.isDirectory,
-      size: Number(item.size || 0),
-    }))
-    .sort((a, b) => {
-      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-      return a.name.localeCompare(b.name, 'tr', { sensitivity: 'base' });
-    });
+  return result.map(item => ({
+    name: item.name,
+    path: item.path,
+    isDirectory: item.isDirectory,
+    size: Number(item.size || 0),
+    lastModified: Number(item.lastModified || 0),
+  }));
 }
 
 function AppContent() {
@@ -236,6 +285,8 @@ function AppContent() {
   const [storageReady, setStorageReady] = useState(false);
   const [storageRoots, setStorageRoots] = useState<StorageRoot[]>([{ label: 'Dahili Depolama', path: ROOT_PATH, removable: false, primary: true }]);
   const [storagePickerVisible, setStoragePickerVisible] = useState(false);
+  const [sortPickerVisible, setSortPickerVisible] = useState(false);
+  const [sortMode, setSortMode] = useState<SortMode>('name-asc');
   const [stack, setStack] = useState<string[]>([ROOT_PATH]);
   const [items, setItems] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -254,6 +305,7 @@ function AppContent() {
   const styles = useMemo(() => createStyles(colors, uiScale, insets.bottom, isLandscape), [colors, uiScale, insets.bottom, isLandscape]);
   const currentStorage = storageRoots.find(root => normalizePath(currentPath).startsWith(normalizePath(root.path))) ?? storageRoots[0];
   const title = stack.length === 1 ? (currentStorage?.label || 'Depolama') : baseName(currentPath);
+  const sortedItems = useMemo(() => sortFileEntries(items, sortMode), [items, sortMode]);
 
   const persistSettings = useCallback((nextTheme: ThemeMode, nextScale: number) => {
     void saveSettings({ theme: nextTheme, scale: nextScale });
@@ -418,6 +470,10 @@ function AppContent() {
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (sortPickerVisible) {
+        setSortPickerVisible(false);
+        return true;
+      }
       if (storagePickerVisible) {
         setStoragePickerVisible(false);
         return true;
@@ -441,7 +497,7 @@ function AppContent() {
       return false;
     });
     return () => sub.remove();
-  }, [aboutVisible, editorMode, selected, stack.length, storagePickerVisible]);
+  }, [aboutVisible, editorMode, selected, sortPickerVisible, stack.length, storagePickerVisible]);
 
   const switchStorage = (root: StorageRoot) => {
     setStoragePickerVisible(false);
@@ -696,6 +752,13 @@ function AppContent() {
           <Text style={styles.headerPath} numberOfLines={1} ellipsizeMode="middle">{currentPath}</Text>
         </Pressable>
         <View style={[styles.accessDot, { backgroundColor: storageReady ? colors.success : colors.danger }]} />
+        <Pressable
+          onPress={() => setSortPickerVisible(true)}
+          style={styles.smallHeaderButton}
+          accessibilityLabel={`Sıralama: ${sortLabel(sortMode)}`}
+        >
+          <Text style={styles.sortButtonText}>⇅</Text>
+        </Pressable>
         <Pressable onPress={() => void refresh()} style={styles.smallHeaderButton} accessibilityLabel="Yenile">
           <Text style={styles.smallHeaderButtonText}>↻</Text>
         </Pressable>
@@ -754,9 +817,9 @@ function AppContent() {
           </View>
         ) : (
           <FlatList
-            data={items}
+            data={sortedItems}
             keyExtractor={item => item.path}
-            contentContainerStyle={items.length === 0 ? styles.emptyList : styles.listContent}
+            contentContainerStyle={sortedItems.length === 0 ? styles.emptyList : styles.listContent}
             ListEmptyComponent={
               <View style={styles.center}>
                 <Text style={styles.muted}>Bu klasör boş.</Text>
@@ -771,7 +834,9 @@ function AppContent() {
                 <Text style={styles.icon}>{item.isDirectory ? '📁' : '📄'}</Text>
                 <View style={styles.rowText}>
                   <Text style={styles.fileName} numberOfLines={1} ellipsizeMode="middle">{item.name}</Text>
-                  <Text style={styles.metaText}>{item.isDirectory ? 'Klasör' : formatSize(item.size)}</Text>
+                  <Text style={styles.metaText}>
+                    {item.isDirectory ? 'Klasör' : formatSize(item.size)}{formatDate(item.lastModified) ? ` • ${formatDate(item.lastModified)}` : ''}
+                  </Text>
                 </View>
                 <Pressable hitSlop={10} onPress={() => setSelected(item)} style={styles.moreButton}>
                   <Text style={styles.moreText}>⋮</Text>
@@ -800,6 +865,34 @@ function AppContent() {
           </Pressable>
         </View>
       )}
+
+      <Modal visible={sortPickerVisible} transparent animationType="fade" onRequestClose={() => setSortPickerVisible(false)}>
+        <Pressable style={styles.overlay} onPress={() => setSortPickerVisible(false)}>
+          <Pressable style={styles.storageSheet} onPress={() => {}}>
+            <Text style={styles.sheetTitle}>Sıralama</Text>
+            {SORT_OPTIONS.map(option => {
+              const active = sortMode === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  style={styles.sortRow}
+                  onPress={() => {
+                    setSortMode(option.value);
+                    setSortPickerVisible(false);
+                  }}
+                >
+                  <Text style={[styles.sortRowText, active && styles.sortRowTextActive]}>{option.label}</Text>
+                  {active && <Text style={styles.storageActive}>✓</Text>}
+                </Pressable>
+              );
+            })}
+            <Text style={styles.sortHint}>Klasörler her zaman dosyaların üstünde gösterilir.</Text>
+            <Pressable style={styles.sheetCancel} onPress={() => setSortPickerVisible(false)}>
+              <Text style={styles.sheetCancelText}>Kapat</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal visible={storagePickerVisible} transparent animationType="fade" onRequestClose={() => setStoragePickerVisible(false)}>
         <Pressable style={styles.overlay} onPress={() => setStoragePickerVisible(false)}>
@@ -992,6 +1085,7 @@ function createStyles(colors: Palette, scale: number, bottomInset: number, isLan
     headerButtonText: { fontSize: 38, lineHeight: 40, color: colors.text },
     smallHeaderButton: { width: 44, height: isLandscape ? 40 : 44, alignItems: 'center', justifyContent: 'center' },
     smallHeaderButtonText: { fontSize: 26, color: colors.text },
+    sortButtonText: { fontSize: 23, color: colors.text, fontWeight: '800' },
     headerTitleWrap: { flex: 1, minWidth: 0, paddingVertical: 4, borderRadius: 8 },
     headerTitlePressed: { backgroundColor: colors.pressed },
     headerTitle: { fontSize: font(17), fontWeight: '700', color: colors.text },
@@ -1058,6 +1152,10 @@ function createStyles(colors: Palette, scale: number, bottomInset: number, isLan
     storageType: { marginTop: 2, color: colors.textMuted, fontSize: font(11.5), fontWeight: '600' },
     storagePath: { marginTop: 2, color: colors.textMuted, fontSize: font(9.8) },
     storageActive: { color: colors.success, fontSize: font(20), fontWeight: '900', paddingHorizontal: 8 },
+    sortRow: { minHeight: 50, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, paddingHorizontal: 4 },
+    sortRowText: { flex: 1, color: colors.text, fontSize: font(14.5), fontWeight: '600' },
+    sortRowTextActive: { color: colors.primary, fontWeight: '800' },
+    sortHint: { marginTop: 10, color: colors.textMuted, fontSize: font(11.5), lineHeight: font(17) },
     sheetTitle: { fontSize: font(17), fontWeight: '800', color: colors.text, paddingHorizontal: 4, paddingBottom: 10 },
     sheetAction: { minHeight: 50, justifyContent: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
     sheetActionText: { fontSize: font(15.5), color: colors.text },
