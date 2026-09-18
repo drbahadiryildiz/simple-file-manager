@@ -1,6 +1,7 @@
 package expo.modules.simplefilemanager
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -16,6 +17,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.util.UUID
 
 class SimpleFileManagerNativeModule : Module() {
   private val context
@@ -90,18 +92,25 @@ class SimpleFileManagerNativeModule : Module() {
       true
     }
 
-    AsyncFunction("copy") { source: String, destination: String ->
+    AsyncFunction("copy") { source: String, destination: String, overwrite: Boolean ->
       ensureExternalAccessIfNeeded(source)
       ensureExternalAccessIfNeeded(destination)
       val src = File(source)
       val dst = File(destination)
+
       if (!src.exists()) throw IllegalStateException("Kaynak bulunamadı: $source")
-      if (dst.exists()) throw IllegalStateException("Hedefte aynı isimde bir öğe zaten var.")
-      copyRecursive(src, dst)
+      if (sameFile(src, dst)) return@AsyncFunction true
+
+      if (dst.exists()) {
+        if (!overwrite) throw IllegalStateException("Hedefte aynı isimde bir öğe zaten var.")
+        replaceSafely(src, dst, deleteSource = false)
+      } else {
+        copyRecursive(src, dst)
+      }
       true
     }
 
-    AsyncFunction("move") { source: String, destination: String ->
+    AsyncFunction("move") { source: String, destination: String, overwrite: Boolean ->
       ensureExternalAccessIfNeeded(source)
       ensureExternalAccessIfNeeded(destination)
       val src = File(source)
@@ -111,7 +120,13 @@ class SimpleFileManagerNativeModule : Module() {
       // taşımış olabilir. Hedef mevcut ve kaynak artık yoksa işlem tamamlanmıştır.
       if (!src.exists() && dst.exists()) return@AsyncFunction true
       if (!src.exists()) throw IllegalStateException("Kaynak bulunamadı: $source")
-      if (dst.exists()) throw IllegalStateException("Hedefte aynı isimde bir öğe zaten var.")
+      if (sameFile(src, dst)) return@AsyncFunction true
+
+      if (dst.exists()) {
+        if (!overwrite) throw IllegalStateException("Hedefte aynı isimde bir öğe zaten var.")
+        replaceSafely(src, dst, deleteSource = true)
+        return@AsyncFunction true
+      }
 
       dst.parentFile?.let { parent ->
         if (!parent.exists() && !parent.mkdirs()) throw IllegalStateException("Hedef klasör hazırlanamadı.")
@@ -252,8 +267,60 @@ class SimpleFileManagerNativeModule : Module() {
     }
   }
 
-  private fun copyRecursive(source: File, destination: File) {
-    if (source.isDirectory) {
+  private fun sameFile(first: File, second: File): Boolean {
+    return try {
+      first.canonicalFile == second.canonicalFile
+    } catch (_: Exception) {
+      first.absoluteFile == second.absoluteFile
+    }
+  }
+
+  private fun replaceSafely(source: File, destination: File, deleteSource: Boolean) {
+    val parent = destination.parentFile ?: throw IllegalStateException("Hedef klasör bulunamadı.")
+    if (!parent.exists() && !parent.mkdirs()) {
+      throw IllegalStateException("Hedef klasör hazırlanamadı.")
+    }
+
+    val token = UUID.randomUUID().toString()
+    val temp = File(parent, "." + destination.name + ".sfm-tmp-" + token)
+    val backup = File(parent, "." + destination.name + ".sfm-bak-" + token)
+
+    try {
+      copyRecursive(source, temp)
+
+      if (destination.exists() && !destination.renameTo(backup)) {
+        throw IllegalStateException("Mevcut hedef güvenli biçimde yedeklenemedi.")
+      }
+
+      if (!temp.renameTo(destination)) {
+        copyRecursive(temp, destination)
+        deleteRecursive(temp)
+      }
+
+      if (deleteSource && source.exists()) {
+        deleteRecursive(source)
+      }
+
+      if (backup.exists()) {
+        deleteRecursive(backup)
+      }
+    } catch (error: Exception) {
+      try {
+        if (temp.exists()) deleteRecursive(temp)
+      } catch (_: Exception) {}
+
+      try {
+        if (backup.exists()) {
+          if (destination.exists()) deleteRecursive(destination)
+          backup.renameTo(destination)
+        }
+      } catch (_: Exception) {}
+
+      throw error
+    }
+  }
+
+  private fun copyRecursive(source: File, destination: File) {    if (source.isDirectory) {
       if (!destination.exists() && !destination.mkdirs()) {
         throw IllegalStateException("Klasör oluşturulamadı: ${destination.absolutePath}")
       }
