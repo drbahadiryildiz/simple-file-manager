@@ -400,7 +400,7 @@ function AppContent() {
 
   const refresh = useCallback(async () => {
     await refreshPath(currentPath);
-  }, [currentPath, refreshPath, tr]);
+  }, [currentPath, refreshPath]);
 
   const requestStorageAccess = useCallback(async () => {
     if (Platform.OS !== 'android') return;
@@ -422,7 +422,7 @@ function AppContent() {
         error instanceof Error ? error.message : tr('permissionScreenFailedMessage')
       );
     }
-  }, [currentPath, refreshPath]);
+  }, [currentPath, refreshPath, tr]);
 
   const showFsError = useCallback((heading: string, error: unknown, targetPath?: string) => {
     const message = error instanceof Error ? error.message : String(error ?? tr('unknownError'));
