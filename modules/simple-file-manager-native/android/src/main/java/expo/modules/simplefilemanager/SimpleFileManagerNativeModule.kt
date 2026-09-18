@@ -164,15 +164,17 @@ class SimpleFileManagerNativeModule : Module() {
       val prefs = context.getSharedPreferences("simple_file_manager", 0)
       mapOf(
         "theme" to prefs.getString("theme", ""),
-        "scale" to prefs.getFloat("scale", 1.0f).toDouble()
+        "scale" to prefs.getFloat("scale", 1.0f).toDouble(),
+        "language" to prefs.getString("language", "")
       )
     }
 
-    AsyncFunction("saveSettings") { theme: String, scale: Double ->
+    AsyncFunction("saveSettings") { theme: String, scale: Double, language: String ->
       context.getSharedPreferences("simple_file_manager", 0)
         .edit()
         .putString("theme", theme)
         .putFloat("scale", scale.toFloat())
+        .putString("language", language)
         .apply()
       true
     }
