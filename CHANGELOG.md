@@ -2,6 +2,15 @@
 
 Bu projedeki önemli kullanıcıya dönük değişiklikler bu dosyada tutulur.
 
+## [1.3.5] - 2026-09-18
+
+- Dosya sıralama menüsü eklendi.
+- Ada göre A→Z / Z→A sıralama eklendi.
+- Boyuta göre küçük→büyük / büyük→küçük sıralama eklendi.
+- Değişiklik tarihine göre yeni→eski / eski→yeni sıralama eklendi.
+- Klasörler sıralama türünden bağımsız olarak dosyaların üstünde tutuluyor.
+- Dosya ve klasör satırlarında son değişiklik tarihi gösteriliyor.
+
 ## [1.3.4] - 2026-09-17
 
 - Depolama birimi adları sadeleştirildi.
